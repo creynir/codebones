@@ -26,7 +26,7 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: all
+          target: x86_64
           args: --release --out dist -m crates/python-ext/Cargo.toml
 
       - name: Upload wheels
