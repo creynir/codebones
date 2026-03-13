@@ -1,7 +1,10 @@
 [package]
 name = "codebones-python-ext"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
+description = "Python bindings for codebones"
+license = "MIT"
+repository = "https://github.com/creynir/codebones"
 
 [lib]
 name = "codebones_python_ext"
