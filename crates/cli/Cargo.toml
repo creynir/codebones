@@ -1,6 +1,6 @@
 [package]
 name = "codebones"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "An AST-aware code indexing and AI context extraction tool"
 license = "MIT"
@@ -9,7 +9,7 @@ repository = "https://github.com/creynir/codebones"
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
-codebones-core = { path = "../core" }
+codebones-core = { path = "../core", version = "0.1.3" }
 
 [[bin]]
 name = "codebones"
