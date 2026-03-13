@@ -54,8 +54,8 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            codebones-*
-            codebones-mcp-*
+            codebones-${{ matrix.os_name }}*
+            codebones-mcp-${{ matrix.os_name }}*
 
   publish-crates:
     name: Publish to Crates.io
