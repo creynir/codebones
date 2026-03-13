@@ -95,11 +95,204 @@ pub fn get_rust_spec() -> LanguageSpec {
     }
 }
 
+pub fn get_java_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_java::LANGUAGE.into(),
+        symbol_node_types: std::collections::HashMap::from([
+            ("method_declaration", SymbolKind::Method),
+            ("class_declaration", SymbolKind::Class),
+            ("interface_declaration", SymbolKind::Interface),
+            ("enum_declaration", SymbolKind::Class),
+        ]),
+        name_fields: std::collections::HashMap::from([
+            ("method_declaration", "name"),
+            ("class_declaration", "name"),
+            ("interface_declaration", "name"),
+            ("enum_declaration", "name"),
+        ]),
+        container_node_types: std::collections::HashSet::from(["class_declaration", "interface_declaration"]),
+        body_node_types: std::collections::HashSet::from(["block", "class_body", "interface_body", "enum_body"]),
+    }
+}
+
+pub fn get_c_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_c::LANGUAGE.into(),
+        symbol_node_types: std::collections::HashMap::from([
+            ("function_definition", SymbolKind::Function),
+            ("struct_specifier", SymbolKind::Struct),
+            ("class_specifier", SymbolKind::Class),
+            ("namespace_definition", SymbolKind::Class),
+        ]),
+        name_fields: std::collections::HashMap::from([
+            ("function_definition", "declarator"),
+            ("struct_specifier", "name"),
+            ("class_specifier", "name"),
+            ("namespace_definition", "name"),
+        ]),
+        container_node_types: std::collections::HashSet::from(["class_specifier", "struct_specifier", "namespace_definition"]),
+        body_node_types: std::collections::HashSet::from(["compound_statement", "field_declaration_list"]),
+    }
+}
+
+pub fn get_cpp_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_cpp::LANGUAGE.into(),
+        symbol_node_types: std::collections::HashMap::from([
+            ("function_definition", SymbolKind::Function),
+            ("struct_specifier", SymbolKind::Struct),
+            ("class_specifier", SymbolKind::Class),
+            ("namespace_definition", SymbolKind::Class),
+        ]),
+        name_fields: std::collections::HashMap::from([
+            ("function_definition", "declarator"),
+            ("struct_specifier", "name"),
+            ("class_specifier", "name"),
+            ("namespace_definition", "name"),
+        ]),
+        container_node_types: std::collections::HashSet::from(["class_specifier", "struct_specifier", "namespace_definition"]),
+        body_node_types: std::collections::HashSet::from(["compound_statement", "field_declaration_list"]),
+    }
+}
+
+pub fn get_csharp_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_c_sharp::LANGUAGE.into(),
+        symbol_node_types: std::collections::HashMap::from([
+            ("method_declaration", SymbolKind::Method),
+            ("class_declaration", SymbolKind::Class),
+            ("interface_declaration", SymbolKind::Interface),
+            ("struct_declaration", SymbolKind::Struct),
+            ("namespace_declaration", SymbolKind::Class),
+        ]),
+        name_fields: std::collections::HashMap::from([
+            ("method_declaration", "name"),
+            ("class_declaration", "name"),
+            ("interface_declaration", "name"),
+            ("struct_declaration", "name"),
+            ("namespace_declaration", "name"),
+        ]),
+        container_node_types: std::collections::HashSet::from(["class_declaration", "interface_declaration", "namespace_declaration", "struct_declaration"]),
+        body_node_types: std::collections::HashSet::from(["block", "declaration_list"]),
+    }
+}
+
+pub fn get_ruby_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_ruby::LANGUAGE.into(),
+        symbol_node_types: std::collections::HashMap::from([
+            ("method", SymbolKind::Method),
+            ("singleton_method", SymbolKind::Method),
+            ("class", SymbolKind::Class),
+            ("module", SymbolKind::Class),
+        ]),
+        name_fields: std::collections::HashMap::from([
+            ("method", "name"),
+            ("singleton_method", "name"),
+            ("class", "name"),
+            ("module", "name"),
+        ]),
+        container_node_types: std::collections::HashSet::from(["class", "module"]),
+        body_node_types: std::collections::HashSet::from(["body", "do_block", "begin_block"]),
+    }
+}
+
+pub fn get_php_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_php::LANGUAGE_PHP.into(),
+        symbol_node_types: std::collections::HashMap::from([
+            ("function_definition", SymbolKind::Function),
+            ("method_declaration", SymbolKind::Method),
+            ("class_declaration", SymbolKind::Class),
+            ("interface_declaration", SymbolKind::Interface),
+            ("trait_declaration", SymbolKind::Class),
+        ]),
+        name_fields: std::collections::HashMap::from([
+            ("function_definition", "name"),
+            ("method_declaration", "name"),
+            ("class_declaration", "name"),
+            ("interface_declaration", "name"),
+            ("trait_declaration", "name"),
+        ]),
+        container_node_types: std::collections::HashSet::from(["class_declaration", "interface_declaration", "trait_declaration"]),
+        body_node_types: std::collections::HashSet::from(["compound_statement", "declaration_list"]),
+    }
+}
+
+pub fn get_swift_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_swift::LANGUAGE.into(),
+        symbol_node_types: std::collections::HashMap::from([
+            ("function_declaration", SymbolKind::Function),
+            ("class_declaration", SymbolKind::Class),
+            ("struct_declaration", SymbolKind::Struct),
+            ("protocol_declaration", SymbolKind::Interface),
+            ("extension_declaration", SymbolKind::Impl),
+        ]),
+        name_fields: std::collections::HashMap::from([
+            ("function_declaration", "name"),
+            ("class_declaration", "name"),
+            ("struct_declaration", "name"),
+            ("protocol_declaration", "name"),
+            ("extension_declaration", "type"),
+        ]),
+        container_node_types: std::collections::HashSet::from(["class_declaration", "struct_declaration", "protocol_declaration", "extension_declaration"]),
+        body_node_types: std::collections::HashSet::from(["class_body", "function_body", "code_block"]),
+    }
+}
+
 pub fn get_spec_for_extension(ext: &str) -> Option<LanguageSpec> {
     match ext {
         "rs" => Some(get_rust_spec()),
         "py" => Some(get_python_spec()),
+        "go" => Some(get_go_spec()),
+        "ts" | "tsx" | "js" | "jsx" => Some(get_typescript_spec()),
+        "java" => Some(get_java_spec()),
+        "c" | "h" => Some(get_c_spec()),
+        "cpp" | "hpp" | "cc" | "cxx" => Some(get_cpp_spec()),
+        "cs" => Some(get_csharp_spec()),
+        "rb" => Some(get_ruby_spec()),
+        "php" => Some(get_php_spec()),
+        "swift" => Some(get_swift_spec()),
         _ => None,
+    }
+}
+
+pub fn get_go_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_go::LANGUAGE.into(),
+        symbol_node_types: std::collections::HashMap::from([
+            ("function_declaration", SymbolKind::Function),
+            ("method_declaration", SymbolKind::Method),
+            ("type_declaration", SymbolKind::Struct),
+        ]),
+        name_fields: std::collections::HashMap::from([
+            ("function_declaration", "name"),
+            ("method_declaration", "name"),
+            ("type_declaration", "name"),
+        ]),
+        container_node_types: std::collections::HashSet::from(["type_declaration"]),
+        body_node_types: std::collections::HashSet::from(["block", "type_spec"]),
+    }
+}
+
+pub fn get_typescript_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        symbol_node_types: std::collections::HashMap::from([
+            ("function_declaration", SymbolKind::Function),
+            ("method_definition", SymbolKind::Method),
+            ("class_declaration", SymbolKind::Class),
+            ("interface_declaration", SymbolKind::Interface),
+        ]),
+        name_fields: std::collections::HashMap::from([
+            ("function_declaration", "name"),
+            ("method_definition", "name"),
+            ("class_declaration", "name"),
+            ("interface_declaration", "name"),
+        ]),
+        container_node_types: std::collections::HashSet::from(["class_declaration", "interface_declaration"]),
+        body_node_types: std::collections::HashSet::from(["statement_block", "class_body", "object_type"]),
     }
 }
 
@@ -132,7 +325,14 @@ fn walk_tree(
         let mut name = None;
         
         if let Some(name_field) = spec.name_fields.get(kind) {
-            if let Some(child) = node.child_by_field_name(name_field) {
+            if let Some(mut child) = node.child_by_field_name(name_field) {
+                while child.kind() == "function_declarator" || child.kind() == "pointer_declarator" || child.kind() == "reference_declarator" {
+                    if let Some(inner) = child.child_by_field_name("declarator") {
+                        child = inner;
+                    } else {
+                        break;
+                    }
+                }
                 if let Ok(text) = std::str::from_utf8(&source[child.start_byte()..child.end_byte()]) {
                     name = Some(text.to_string());
                 }
@@ -177,6 +377,17 @@ fn walk_tree(
                 if let Some(prev) = body_node.prev_sibling() {
                     if prev.kind() == ":" {
                         start = prev.end_byte();
+                    } else {
+                        let mut has_newline = false;
+                        for i in prev.end_byte()..start {
+                            if i < source.len() && (source[i] == b'\n' || source[i] == b'\r') {
+                                has_newline = true;
+                                break;
+                            }
+                        }
+                        if has_newline {
+                            start = prev.end_byte();
+                        }
                     }
                 }
                 body_range = Some(start..body_node.end_byte());
@@ -322,5 +533,118 @@ mod tests {
         let doc = parse_file(source, &spec);
         
         assert!(doc.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_extract_java_class_and_method_elide_body() {
+        let source = "public class MyClass {\n    public void doWork() {\n        System.out.println(\"work\");\n    }\n}";
+        let spec = get_java_spec();
+        let doc = parse_file(source, &spec);
+        
+        assert_eq!(doc.symbols.len(), 2);
+        
+        let class_sym = doc.symbols.iter().find(|s| s.name == "MyClass").unwrap();
+        assert_eq!(class_sym.kind, SymbolKind::Class);
+        assert!(class_sym.body_range.is_some());
+        
+        let method_sym = doc.symbols.iter().find(|s| s.name == "doWork").unwrap();
+        assert_eq!(method_sym.kind, SymbolKind::Method);
+        assert_eq!(method_sym.qualified_name, "MyClass.doWork");
+        assert!(method_sym.body_range.is_some());
+        
+        let elided = elide_document(source, &doc);
+        assert!(elided.starts_with("public class MyClass ..."));
+    }
+
+    #[test]
+    fn test_extract_c_cpp_function_elide_body() {
+        let source = "int calculate(int a, int b) {\n    return a + b;\n}";
+        let spec = get_c_spec();
+        let doc = parse_file(source, &spec);
+        
+        assert_eq!(doc.symbols.len(), 1);
+        
+        let func_sym = doc.symbols.iter().find(|s| s.name == "calculate").unwrap();
+        assert_eq!(func_sym.kind, SymbolKind::Function);
+        assert!(func_sym.body_range.is_some());
+        
+        let elided = elide_document(source, &doc);
+        assert!(elided.starts_with("int calculate(int a, int b) ..."));
+    }
+
+    #[test]
+    fn test_extract_csharp_class_and_method_elide_body() {
+        let source = "public class Server {\n    public async Task StartAsync() {\n        await Task.Delay(10);\n    }\n}";
+        let spec = get_csharp_spec();
+        let doc = parse_file(source, &spec);
+        
+        assert_eq!(doc.symbols.len(), 2);
+        
+        let class_sym = doc.symbols.iter().find(|s| s.name == "Server").unwrap();
+        assert_eq!(class_sym.kind, SymbolKind::Class);
+        
+        let method_sym = doc.symbols.iter().find(|s| s.name == "StartAsync").unwrap();
+        assert_eq!(method_sym.kind, SymbolKind::Method);
+        assert_eq!(method_sym.qualified_name, "Server.StartAsync");
+        
+        let elided = elide_document(source, &doc);
+        assert!(elided.starts_with("public class Server ..."));
+    }
+
+    #[test]
+    fn test_extract_ruby_class_and_method_elide_body() {
+        let source = "class User\n  def login(email)\n    puts 'login'\n  end\nend";
+        let spec = get_ruby_spec();
+        let doc = parse_file(source, &spec);
+        
+        assert_eq!(doc.symbols.len(), 2);
+        
+        let class_sym = doc.symbols.iter().find(|s| s.name == "User").unwrap();
+        assert_eq!(class_sym.kind, SymbolKind::Class);
+        
+        let method_sym = doc.symbols.iter().find(|s| s.name == "login").unwrap();
+        assert_eq!(method_sym.kind, SymbolKind::Method);
+        assert_eq!(method_sym.qualified_name, "User.login");
+        
+        let elided = elide_document(source, &doc);
+        assert!(elided.starts_with("class User..."));
+    }
+
+    #[test]
+    fn test_extract_php_class_and_method_elide_body() {
+        let source = "<?php\nclass Controller {\n    public function handle($req) {\n        return true;\n    }\n}";
+        let spec = get_php_spec();
+        let doc = parse_file(source, &spec);
+        
+        assert_eq!(doc.symbols.len(), 2);
+        
+        let class_sym = doc.symbols.iter().find(|s| s.name == "Controller").unwrap();
+        assert_eq!(class_sym.kind, SymbolKind::Class);
+        
+        let method_sym = doc.symbols.iter().find(|s| s.name == "handle").unwrap();
+        assert_eq!(method_sym.kind, SymbolKind::Method);
+        assert_eq!(method_sym.qualified_name, "Controller.handle");
+        
+        let elided = elide_document(source, &doc);
+        assert!(elided.contains("class Controller ..."));
+    }
+
+    #[test]
+    fn test_extract_swift_class_and_function_elide_body() {
+        let source = "class ViewModel {\n    func loadData(with id: String) {\n        print(id)\n    }\n}";
+        let spec = get_swift_spec();
+        let doc = parse_file(source, &spec);
+        
+        assert_eq!(doc.symbols.len(), 2);
+        
+        let class_sym = doc.symbols.iter().find(|s| s.name == "ViewModel").unwrap();
+        assert_eq!(class_sym.kind, SymbolKind::Class);
+        
+        let method_sym = doc.symbols.iter().find(|s| s.name == "loadData").unwrap();
+        assert_eq!(method_sym.kind, SymbolKind::Function);
+        assert_eq!(method_sym.qualified_name, "ViewModel.loadData");
+        
+        let elided = elide_document(source, &doc);
+        assert!(elided.starts_with("class ViewModel ..."));
     }
 }

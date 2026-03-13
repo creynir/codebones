@@ -25,7 +25,7 @@ impl Default for IndexerOptions {
     fn default() -> Self {
         Self {
             max_file_size_bytes: 500 * 1024,
-            max_file_count: 500,
+            max_file_count: 100000,
             follow_symlinks: false,
             respect_gitignore: true,
             custom_ignore_file: Some(".codebonesignore".to_string()),
@@ -86,7 +86,10 @@ impl Indexer for DefaultIndexer {
 
             // Path traversal check
             let canonical_root = std::fs::canonicalize(workspace_root)?;
-            let canonical_path = std::fs::canonicalize(path)?;
+            let canonical_path = match std::fs::canonicalize(path) {
+                Ok(p) => p,
+                Err(_) => continue, // Skip broken symlinks or missing files
+            };
             if !canonical_path.starts_with(&canonical_root) {
                 return Err(IndexerError::PathTraversal(path.to_path_buf()));
             }
