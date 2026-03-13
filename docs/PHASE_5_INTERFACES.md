@@ -60,21 +60,26 @@ fn main() -> anyhow::Result<()> {
 
 ## 2. MCP Server Setup (`crates/mcp/src/main.rs`)
 
-The MCP server exposes the core capabilities as tools over stdio, allowing AI agents (like Claude Desktop) to interact with the codebase.
+The MCP server exposes the core capabilities as tools over stdio, allowing AI agents (like Claude Desktop or Cursor) to interact with the codebase. We use the official `rmcp` crate for JSON-RPC/stdio handling and directly import `codebones-core` to maintain an in-memory `O(1)` connection pool to the SQLite cache for maximum performance.
 
 ```rust
-use mcp_sdk::{Server, Tool};
+use rmcp::{server::Server, Tool};
+use codebones_core::cache::Cache;
 // ... imports ...
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize the core cache once for O(1) in-memory reuse
+    let cache = Cache::new("codebones.db")?;
+
     let mut server = Server::new("codebones-mcp", "0.1.0");
 
+    // rmcp allows us to cleanly map core functions to tools
     server.register_tool(
         Tool::new("index", "Builds or updates the codebones index for a directory")
             .with_arg("dir", "string", "Directory to index"),
         |args| async move {
-            // Call core::indexer
+            // Direct call to core::indexer
             Ok("Indexing complete".into())
         }
     );
@@ -83,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
         Tool::new("outline", "Gets the skeleton outline of a file or directory")
             .with_arg("path", "string", "Path to file or directory"),
         |args| async move {
-            // Call core::outline
+            // Direct call to core::outline using the shared cache
             Ok("...".into())
         }
     );
@@ -92,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
         Tool::new("get", "Retrieves the full source code for a specific symbol")
             .with_arg("symbol", "string", "Symbol name to retrieve"),
         |args| async move {
-            // Call core::get
+            // Direct call to core::get using the shared cache
             Ok("...".into())
         }
     );
@@ -101,7 +106,7 @@ async fn main() -> anyhow::Result<()> {
         Tool::new("search", "Searches for symbols across the repository")
             .with_arg("query", "string", "Search query"),
         |args| async move {
-            // Call core::search
+            // Direct call to core::search using the shared cache
             Ok("...".into())
         }
     );

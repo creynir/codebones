@@ -1,0 +1,11 @@
+---
+description: Always ask for user approval before moving to the next step, phase, or agent dispatch.
+globs: *
+---
+# Strict Approval Protocol
+
+1. NEVER dispatch a new sub-agent for a subsequent phase without EXPLICIT user approval.
+2. ALWAYS present the research, findings, or specification documents to the user for review FIRST.
+3. ONLY after the user says "looks good", "go ahead", or otherwise confirms, may you proceed to TDD/Implementation.
+4. DO NOT speed run. We are taking our time to get the architecture right.
+5. If the user asks a series of questions, answer ALL of them clearly before asking for permission to proceed.

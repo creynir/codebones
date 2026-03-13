@@ -3,6 +3,17 @@ name = "codebones-python-ext"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "codebones_python_ext"
+crate-type = ["cdylib", "rlib"]
+test = false
+
 [dependencies]
 codebones-core = { path = "../core" }
-pyo3 = { version = "0.28.2", features = ["extension-module"] }
+pyo3 = { version = "0.28.2" }
+
+[features]
+extension-module = ["pyo3/extension-module"]
+
+[dev-dependencies]
+pyo3 = { version = "0.28.2", features = ["auto-initialize"] }

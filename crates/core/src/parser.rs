@@ -61,6 +61,48 @@ pub struct LanguageSpec {
     pub body_node_types: HashSet<&'static str>,
 }
 
+pub fn get_python_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_python::LANGUAGE.into(),
+        symbol_node_types: HashMap::from([
+            ("function_definition", SymbolKind::Function),
+            ("class_definition", SymbolKind::Class),
+        ]),
+        name_fields: HashMap::from([
+            ("function_definition", "name"),
+            ("class_definition", "name"),
+        ]),
+        container_node_types: HashSet::from(["class_definition"]),
+        body_node_types: HashSet::from(["block"]),
+    }
+}
+
+pub fn get_rust_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_rust::LANGUAGE.into(),
+        symbol_node_types: HashMap::from([
+            ("function_item", SymbolKind::Function),
+            ("struct_item", SymbolKind::Struct),
+            ("impl_item", SymbolKind::Impl),
+        ]),
+        name_fields: HashMap::from([
+            ("function_item", "name"),
+            ("struct_item", "name"),
+            ("impl_item", "type"),
+        ]),
+        container_node_types: HashSet::from(["impl_item"]),
+        body_node_types: HashSet::from(["block", "declaration_list"]),
+    }
+}
+
+pub fn get_spec_for_extension(ext: &str) -> Option<LanguageSpec> {
+    match ext {
+        "rs" => Some(get_rust_spec()),
+        "py" => Some(get_python_spec()),
+        _ => None,
+    }
+}
+
 pub fn parse_file(source: &str, spec: &LanguageSpec) -> ParsedDocument {
     let mut parser = tree_sitter::Parser::new();
     parser.set_language(&spec.language).expect("Error loading language");
@@ -164,40 +206,6 @@ fn walk_tree(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn get_python_spec() -> LanguageSpec {
-        LanguageSpec {
-            language: tree_sitter_python::LANGUAGE.into(),
-            symbol_node_types: HashMap::from([
-                ("function_definition", SymbolKind::Function),
-                ("class_definition", SymbolKind::Class),
-            ]),
-            name_fields: HashMap::from([
-                ("function_definition", "name"),
-                ("class_definition", "name"),
-            ]),
-            container_node_types: HashSet::from(["class_definition"]),
-            body_node_types: HashSet::from(["block"]),
-        }
-    }
-
-    fn get_rust_spec() -> LanguageSpec {
-        LanguageSpec {
-            language: tree_sitter_rust::LANGUAGE.into(),
-            symbol_node_types: HashMap::from([
-                ("function_item", SymbolKind::Function),
-                ("struct_item", SymbolKind::Struct),
-                ("impl_item", SymbolKind::Impl),
-            ]),
-            name_fields: HashMap::from([
-                ("function_item", "name"),
-                ("struct_item", "name"),
-                ("impl_item", "type"),
-            ]),
-            container_node_types: HashSet::from(["impl_item"]),
-            body_node_types: HashSet::from(["block", "declaration_list"]),
-        }
-    }
 
     fn elide_document(source: &str, doc: &ParsedDocument) -> String {
         let mut result = String::new();
