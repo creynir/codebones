@@ -1,5 +1,5 @@
 [package]
-name = "codebones-cli"
+name = "codebones"
 version = "0.1.0"
 edition = "2021"
 
