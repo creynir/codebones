@@ -1,8 +1,8 @@
-use std::path::{Path, PathBuf};
+use ignore::WalkBuilder;
+use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::Read;
-use sha2::{Sha256, Digest};
-use ignore::WalkBuilder;
+use std::path::{Path, PathBuf};
 
 /// Represents a successfully indexed and hashed file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,10 +14,10 @@ pub struct FileHash {
 /// Configuration options for the indexer.
 #[derive(Debug, Clone)]
 pub struct IndexerOptions {
-    pub max_file_size_bytes: u64, // Default: 500 KB
-    pub max_file_count: usize,    // Default: 500
-    pub follow_symlinks: bool,    // Default: false
-    pub respect_gitignore: bool,  // Default: true
+    pub max_file_size_bytes: u64,           // Default: 500 KB
+    pub max_file_count: usize,              // Default: 500
+    pub follow_symlinks: bool,              // Default: false
+    pub respect_gitignore: bool,            // Default: true
     pub custom_ignore_file: Option<String>, // e.g., ".codebonesignore"
 }
 
@@ -36,7 +36,11 @@ impl Default for IndexerOptions {
 /// The core indexer trait.
 pub trait Indexer {
     /// Indexes the given workspace path and returns a list of file hashes.
-    fn index(&self, workspace_root: &Path, options: &IndexerOptions) -> Result<Vec<FileHash>, IndexerError>;
+    fn index(
+        &self,
+        workspace_root: &Path,
+        options: &IndexerOptions,
+    ) -> Result<Vec<FileHash>, IndexerError>;
 }
 
 /// Errors that can occur during indexing.
@@ -55,7 +59,11 @@ pub enum IndexerError {
 pub struct DefaultIndexer;
 
 impl Indexer for DefaultIndexer {
-    fn index(&self, workspace_root: &Path, options: &IndexerOptions) -> Result<Vec<FileHash>, IndexerError> {
+    fn index(
+        &self,
+        workspace_root: &Path,
+        options: &IndexerOptions,
+    ) -> Result<Vec<FileHash>, IndexerError> {
         let mut results = Vec::new();
         let mut count = 0;
 
@@ -105,16 +113,32 @@ impl Indexer for DefaultIndexer {
 
             // Secret exclusion
             let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-            if file_name == ".env" || file_name.starts_with(".env.") || file_name.ends_with(".pem") ||
-               file_name.ends_with(".key") || file_name.starts_with("id_rsa") || file_name.starts_with("id_ed25519") ||
-               file_name == "credentials.json" || file_name.ends_with(".secrets") || file_name.ends_with(".token") ||
-               file_name == ".npmrc" || file_name == ".netrc" {
+            if file_name == ".env"
+                || file_name.starts_with(".env.")
+                || file_name.ends_with(".pem")
+                || file_name.ends_with(".key")
+                || file_name.starts_with("id_rsa")
+                || file_name.starts_with("id_ed25519")
+                || file_name == "credentials.json"
+                || file_name.ends_with(".secrets")
+                || file_name.ends_with(".token")
+                || file_name == ".npmrc"
+                || file_name == ".netrc"
+            {
                 continue;
             }
 
             // Binary detection (extension)
-            let ext = path.extension().unwrap_or_default().to_string_lossy().to_lowercase();
-            if ["exe", "dll", "so", "png", "jpg", "jpeg", "pdf", "db", "sqlite", "wasm"].contains(&ext.as_str()) {
+            let ext = path
+                .extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase();
+            if [
+                "exe", "dll", "so", "png", "jpg", "jpeg", "pdf", "db", "sqlite", "wasm",
+            ]
+            .contains(&ext.as_str())
+            {
                 continue;
             }
 
@@ -138,7 +162,10 @@ impl Indexer for DefaultIndexer {
             std::io::copy(&mut file, &mut hasher)?;
             let hash = hex::encode(hasher.finalize());
 
-            let rel_path = path.strip_prefix(workspace_root).unwrap_or(path).to_path_buf();
+            let rel_path = path
+                .strip_prefix(workspace_root)
+                .unwrap_or(path)
+                .to_path_buf();
 
             results.push(FileHash {
                 path: rel_path,
@@ -176,7 +203,7 @@ mod tests {
     fn test_skips_symlinks_escaping_root() {
         let dir = setup_workspace();
         let root = dir.path();
-        
+
         let out_dir = TempDir::new().unwrap();
         let out_file = out_dir.path().join("out.txt");
         fs::write(&out_file, "out").unwrap();
@@ -186,8 +213,10 @@ mod tests {
         std::os::unix::fs::symlink(&out_file, &symlink_path).unwrap();
 
         let indexer = DefaultIndexer;
-        let mut options = IndexerOptions::default();
-        options.follow_symlinks = true;
+        let options = IndexerOptions {
+            follow_symlinks: true,
+            ..Default::default()
+        };
 
         let result = indexer.index(root, &options);
         assert!(matches!(result, Err(IndexerError::PathTraversal(_))));
@@ -242,8 +271,10 @@ mod tests {
         file.write_all(&vec![b'a'; 600 * 1024]).unwrap();
 
         let indexer = DefaultIndexer;
-        let mut options = IndexerOptions::default();
-        options.max_file_size_bytes = 500 * 1024;
+        let options = IndexerOptions {
+            max_file_size_bytes: 500 * 1024,
+            ..Default::default()
+        };
         let results = indexer.index(root, &options).unwrap();
         assert!(results.is_empty());
     }
@@ -290,8 +321,10 @@ mod tests {
         }
 
         let indexer = DefaultIndexer;
-        let mut options = IndexerOptions::default();
-        options.max_file_count = 5;
+        let options = IndexerOptions {
+            max_file_count: 5,
+            ..Default::default()
+        };
         let result = indexer.index(root, &options);
         assert!(matches!(result, Err(IndexerError::FileCountLimitExceeded)));
     }
@@ -305,6 +338,9 @@ mod tests {
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].hash, "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
+        assert_eq!(
+            results[0].hash,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
     }
 }

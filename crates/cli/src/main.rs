@@ -44,14 +44,15 @@ pub enum Commands {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    
+
     match cli.command {
         Commands::Index { dir } => {
             codebones_core::api::index(&dir)?;
             println!("Indexing complete");
         }
         Commands::Outline { path } => {
-            let result = codebones_core::api::outline(std::path::Path::new("."), &path.to_string_lossy())?;
+            let result =
+                codebones_core::api::outline(std::path::Path::new("."), &path.to_string_lossy())?;
             println!("{}", result);
         }
         Commands::Get { symbol_or_path } => {
@@ -69,23 +70,19 @@ fn main() -> anyhow::Result<()> {
             println!("{}", result);
         }
     }
-    
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
-    fn test_cli_index_and_get_e2e() {
-    }
+    fn test_cli_index_and_get_e2e() {}
 
     #[test]
-    fn test_cli_pack_format() {
-    }
+    fn test_cli_pack_format() {}
 
     #[test]
-    fn test_cli_search_fts5() {
-    }
+    fn test_cli_search_fts5() {}
 }

@@ -1,17 +1,17 @@
-use std::path::{Path, PathBuf};
-use anyhow::Result;
-use crate::parser::Bone;
 use crate::cache::Cache;
+use crate::parser::Bone;
 use crate::parser::Parser;
+use anyhow::Result;
+use std::path::{Path, PathBuf};
 
 /// A plugin that can enrich extracted code bones with domain-specific metadata.
 pub trait ContextPlugin: Send + Sync {
     /// The unique name of the plugin (e.g., "dbt", "openapi").
     fn name(&self) -> &str;
-    
+
     /// Returns true if this plugin should be active for the given directory/workspace.
     fn detect(&self, directory: &Path) -> bool;
-    
+
     /// Enriches the extracted bones for a specific file with additional metadata.
     /// The plugin can modify the `base_bones` in place (e.g., adding JSON metadata).
     fn enrich(&self, file_path: &Path, base_bones: &mut Vec<Bone>) -> Result<()>;
@@ -34,7 +34,12 @@ pub struct Packer {
 
 impl Packer {
     /// Creates a new Packer instance.
-    pub fn new(cache: Cache, parser: Parser, format: OutputFormat, max_tokens: Option<usize>) -> Self {
+    pub fn new(
+        cache: Cache,
+        parser: Parser,
+        format: OutputFormat,
+        max_tokens: Option<usize>,
+    ) -> Self {
         Self {
             cache,
             parser,
@@ -53,14 +58,14 @@ impl Packer {
     pub fn pack(&self, file_paths: &[PathBuf]) -> Result<String> {
         let _ = &self.cache;
         let _ = &self.parser;
-        
+
         let mut output = String::new();
-        
+
         match self.format {
             OutputFormat::Xml => output.push_str("<repository>\n"),
             OutputFormat::Markdown => {}
         }
-        
+
         // Generate Skeleton Map
         match self.format {
             OutputFormat::Xml => {
@@ -77,13 +82,13 @@ impl Packer {
                 for path in file_paths {
                     output.push_str(&format!("- {}\n", path.display()));
                 }
-                output.push_str("\n");
+                output.push('\n');
             }
         }
-        
+
         let bpe = tiktoken_rs::cl100k_base().unwrap();
         let mut degrade_to_bones = false;
-        
+
         for path in file_paths {
             let content = if path.to_string_lossy() == "test.rs" {
                 "dummy content".to_string()
@@ -91,13 +96,13 @@ impl Packer {
                 std::fs::read_to_string(path)?
             };
             let mut bones = vec![Bone::default()];
-            
+
             for plugin in &self.plugins {
                 if plugin.detect(path) {
                     plugin.enrich(path, &mut bones)?;
                 }
             }
-            
+
             if !degrade_to_bones {
                 if let Some(max) = self.max_tokens {
                     let current_tokens = bpe.encode_with_special_tokens(&output).len();
@@ -107,7 +112,7 @@ impl Packer {
                     }
                 }
             }
-            
+
             match self.format {
                 OutputFormat::Xml => {
                     output.push_str(&format!("  <file path=\"{}\">\n", path.display()));
@@ -117,7 +122,10 @@ impl Packer {
                     output.push_str("    <bones>\n");
                     for bone in &bones {
                         for (k, v) in &bone.metadata {
-                            output.push_str(&format!("      <metadata key=\"{}\">{}</metadata>\n", k, v));
+                            output.push_str(&format!(
+                                "      <metadata key=\"{}\">{}</metadata>\n",
+                                k, v
+                            ));
                         }
                     }
                     output.push_str("    </bones>\n");
@@ -134,16 +142,16 @@ impl Packer {
                             output.push_str(&format!("- {}: {}\n", k, v));
                         }
                     }
-                    output.push_str("\n");
+                    output.push('\n');
                 }
             }
         }
-        
+
         match self.format {
             OutputFormat::Xml => output.push_str("</repository>\n"),
             OutputFormat::Markdown => {}
         }
-        
+
         Ok(output)
     }
 }
@@ -165,7 +173,8 @@ mod tests {
 
         fn enrich(&self, _file_path: &Path, base_bones: &mut Vec<Bone>) -> Result<()> {
             for bone in base_bones.iter_mut() {
-                bone.metadata.insert("injected".to_string(), "true".to_string());
+                bone.metadata
+                    .insert("injected".to_string(), "true".to_string());
             }
             Ok(())
         }

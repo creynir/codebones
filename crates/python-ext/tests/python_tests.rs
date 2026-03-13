@@ -1,5 +1,5 @@
-use pyo3::prelude::*;
 use codebones_python_ext::Codebones;
+use pyo3::prelude::*;
 
 #[test]
 fn test_python_api_get_exception_handling() {
@@ -18,7 +18,7 @@ fn test_python_api_e2e() {
     Python::attach(|_py| {
         let _ = Codebones::index(".".to_string());
         let results = Codebones::search("test".to_string()).unwrap();
-        
+
         assert!(!results.is_empty(), "Expected symbols from the fixture");
     });
 }

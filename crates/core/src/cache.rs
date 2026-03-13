@@ -78,7 +78,7 @@ impl CacheStore for SqliteCache {
                 FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
-            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);"
+            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);",
         )?;
         Ok(())
     }
@@ -94,7 +94,9 @@ impl CacheStore for SqliteCache {
     }
 
     fn get_file_hash(&self, path: &str) -> rusqlite::Result<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT hash FROM files WHERE path = ?1")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT hash FROM files WHERE path = ?1")?;
         let mut rows = stmt.query(rusqlite::params![path])?;
         if let Some(row) = rows.next()? {
             Ok(Some(row.get(0)?))
@@ -130,7 +132,7 @@ impl CacheStore for SqliteCache {
             "SELECT substr(f.content, s.byte_offset + 1, s.byte_length) 
              FROM symbols s
              JOIN files f ON s.file_id = f.id
-             WHERE s.id = ?1"
+             WHERE s.id = ?1",
         )?;
         let mut rows = stmt.query(rusqlite::params![symbol_id])?;
         if let Some(row) = rows.next()? {
@@ -141,7 +143,8 @@ impl CacheStore for SqliteCache {
     }
 
     fn delete_file(&self, path: &str) -> rusqlite::Result<()> {
-        self.conn.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+        self.conn
+            .execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
         Ok(())
     }
 }
@@ -156,8 +159,12 @@ mod tests {
         cache.init().unwrap();
 
         let mut stmt = cache.conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('files', 'symbols')").unwrap();
-        let tables: Vec<String> = stmt.query_map([], |row| row.get(0)).unwrap().collect::<Result<_, _>>().unwrap();
-        
+        let tables: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
         assert!(tables.contains(&"files".to_string()));
         assert!(tables.contains(&"symbols".to_string()));
     }
@@ -167,12 +174,19 @@ mod tests {
         let cache = SqliteCache::new_in_memory().unwrap();
         cache.init().unwrap();
 
-        let id = cache.upsert_file("src/main.rs", "hash123", b"fn main() {}").unwrap();
+        let id = cache
+            .upsert_file("src/main.rs", "hash123", b"fn main() {}")
+            .unwrap();
         assert!(id > 0);
 
-        let mut stmt = cache.conn.prepare("SELECT path, hash FROM files WHERE id = ?").unwrap();
-        let (path, hash): (String, String) = stmt.query_row([id], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
-        
+        let mut stmt = cache
+            .conn
+            .prepare("SELECT path, hash FROM files WHERE id = ?")
+            .unwrap();
+        let (path, hash): (String, String) = stmt
+            .query_row([id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .unwrap();
+
         assert_eq!(path, "src/main.rs");
         assert_eq!(hash, "hash123");
     }
@@ -182,8 +196,10 @@ mod tests {
         let cache = SqliteCache::new_in_memory().unwrap();
         cache.init().unwrap();
 
-        cache.upsert_file("src/main.rs", "hash123", b"fn main() {}").unwrap();
-        
+        cache
+            .upsert_file("src/main.rs", "hash123", b"fn main() {}")
+            .unwrap();
+
         let hash = cache.get_file_hash("src/main.rs").unwrap();
         assert_eq!(hash, Some("hash123".to_string()));
     }
@@ -233,7 +249,9 @@ mod tests {
         let cache = SqliteCache::new_in_memory().unwrap();
         cache.init().unwrap();
 
-        let file_id = cache.upsert_file("src/temp.rs", "hash789", b"fn temp() {}").unwrap();
+        let file_id = cache
+            .upsert_file("src/temp.rs", "hash789", b"fn temp() {}")
+            .unwrap();
 
         let symbol = Symbol {
             id: "sym_temp".to_string(),
@@ -247,9 +265,12 @@ mod tests {
 
         cache.delete_file("src/temp.rs").unwrap();
 
-        let mut stmt = cache.conn.prepare("SELECT COUNT(*) FROM symbols WHERE file_id = ?").unwrap();
+        let mut stmt = cache
+            .conn
+            .prepare("SELECT COUNT(*) FROM symbols WHERE file_id = ?")
+            .unwrap();
         let count: i64 = stmt.query_row([file_id], |row| row.get(0)).unwrap();
-        
+
         assert_eq!(count, 0);
     }
 }

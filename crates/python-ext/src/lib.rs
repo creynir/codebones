@@ -1,5 +1,5 @@
-use pyo3::prelude::*;
 use pyo3::exceptions::PyValueError;
+use pyo3::prelude::*;
 
 #[pyclass]
 pub struct Codebones {
@@ -9,6 +9,7 @@ pub struct Codebones {
 #[pymethods]
 impl Codebones {
     #[new]
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Codebones {}
     }

@@ -27,7 +27,10 @@ fn test_cli_pack_format() {
         .output()
         .expect("Failed to execute codebones pack");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("<repository>"), "Output should be valid XML containing repository");
+    assert!(
+        stdout.contains("<repository>"),
+        "Output should be valid XML containing repository"
+    );
 }
 
 #[test]
