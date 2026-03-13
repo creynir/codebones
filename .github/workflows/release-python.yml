@@ -26,7 +26,7 @@ jobs:
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
-          target: ${{ matrix.os == 'macos-latest' && 'x86_64,aarch64' || 'x86_64' }}
+          target: ${{ matrix.os == 'macos-latest' && 'universal2-apple-darwin' || 'x86_64' }}
           args: --release --out dist -m crates/python-ext/Cargo.toml
 
       - name: Upload wheels
