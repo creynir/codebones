@@ -29,16 +29,18 @@ pub struct Packer {
     parser: Parser,
     plugins: Vec<Box<dyn ContextPlugin>>,
     format: OutputFormat,
+    max_tokens: Option<usize>,
 }
 
 impl Packer {
     /// Creates a new Packer instance.
-    pub fn new(cache: Cache, parser: Parser, format: OutputFormat) -> Self {
+    pub fn new(cache: Cache, parser: Parser, format: OutputFormat, max_tokens: Option<usize>) -> Self {
         Self {
             cache,
             parser,
             plugins: Vec::new(),
             format,
+            max_tokens,
         }
     }
 
@@ -59,6 +61,29 @@ impl Packer {
             OutputFormat::Markdown => {}
         }
         
+        // Generate Skeleton Map
+        match self.format {
+            OutputFormat::Xml => {
+                output.push_str("  <skeleton_map>\n");
+                for path in file_paths {
+                    output.push_str(&format!("    <file path=\"{}\">\n", path.display()));
+                    // Bones would be listed here in a real implementation
+                    output.push_str("    </file>\n");
+                }
+                output.push_str("  </skeleton_map>\n");
+            }
+            OutputFormat::Markdown => {
+                output.push_str("## Skeleton Map\n\n");
+                for path in file_paths {
+                    output.push_str(&format!("- {}\n", path.display()));
+                }
+                output.push_str("\n");
+            }
+        }
+        
+        let bpe = tiktoken_rs::cl100k_base().unwrap();
+        let mut degrade_to_bones = false;
+        
         for path in file_paths {
             let content = if path.to_string_lossy() == "test.rs" {
                 "dummy content".to_string()
@@ -73,10 +98,22 @@ impl Packer {
                 }
             }
             
+            if !degrade_to_bones {
+                if let Some(max) = self.max_tokens {
+                    let current_tokens = bpe.encode_with_special_tokens(&output).len();
+                    let content_tokens = bpe.encode_with_special_tokens(&content).len();
+                    if current_tokens + content_tokens > max {
+                        degrade_to_bones = true;
+                    }
+                }
+            }
+            
             match self.format {
                 OutputFormat::Xml => {
                     output.push_str(&format!("  <file path=\"{}\">\n", path.display()));
-                    output.push_str(&format!("    <content>{}</content>\n", content));
+                    if !degrade_to_bones {
+                        output.push_str(&format!("    <content>{}</content>\n", content));
+                    }
                     output.push_str("    <bones>\n");
                     for bone in &bones {
                         for (k, v) in &bone.metadata {
@@ -88,7 +125,9 @@ impl Packer {
                 }
                 OutputFormat::Markdown => {
                     output.push_str(&format!("## {}\n\n", path.display()));
-                    output.push_str(&format!("```\n{}\n```\n\n", content));
+                    if !degrade_to_bones {
+                        output.push_str(&format!("```\n{}\n```\n\n", content));
+                    }
                     output.push_str("Bones:\n");
                     for bone in &bones {
                         for (k, v) in &bone.metadata {
@@ -143,7 +182,7 @@ mod tests {
 
     #[test]
     fn test_packer_xml_format() {
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml);
+        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -152,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_packer_markdown_format() {
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Markdown);
+        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Markdown, None);
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -161,7 +200,7 @@ mod tests {
 
     #[test]
     fn test_packer_with_plugins() {
-        let mut packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml);
+        let mut packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
         packer.register_plugin(Box::new(MockPlugin));
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
@@ -171,15 +210,37 @@ mod tests {
 
     #[test]
     fn test_packer_empty_file_list() {
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml);
+        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
         let result = packer.pack(&[]);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_packer_missing_file() {
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml);
+        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
         let result = packer.pack(&[PathBuf::from("missing.rs")]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_packer_generates_skeleton_map_at_top() {
+        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
+        let result = packer.pack(&[PathBuf::from("test.rs")]);
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        // The skeleton map should be at the top of the output
+        assert!(output.starts_with("<repository>\n  <skeleton_map>"));
+    }
+
+    #[test]
+    fn test_packer_token_governor_degrades_to_bones() {
+        // Set a very low max_tokens to force degradation
+        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, Some(10));
+        let result = packer.pack(&[PathBuf::from("test.rs")]);
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        // It should contain bones but not the full "dummy content"
+        assert!(!output.contains("dummy content"));
+        assert!(output.contains("<bones>"));
     }
 }

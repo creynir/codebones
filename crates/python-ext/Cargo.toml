@@ -5,3 +5,4 @@ edition = "2021"
 
 [dependencies]
 codebones-core = { path = "../core" }
+pyo3 = { version = "0.28.2", features = ["extension-module"] }

@@ -49,16 +49,18 @@ pub struct Packer {
     parser: Parser,
     plugins: Vec<Box<dyn ContextPlugin>>,
     format: OutputFormat,
+    max_tokens: Option<usize>,
 }
 
 impl Packer {
     /// Creates a new Packer instance.
-    pub fn new(cache: Cache, parser: Parser, format: OutputFormat) -> Self {
+    pub fn new(cache: Cache, parser: Parser, format: OutputFormat, max_tokens: Option<usize>) -> Self {
         Self {
             cache,
             parser,
             plugins: Vec::new(),
             format,
+            max_tokens,
         }
     }
 
@@ -70,12 +72,14 @@ impl Packer {
     /// Packs the specified files into a single formatted string.
     pub fn pack(&self, file_paths: &[PathBuf]) -> Result<String> {
         // Implementation steps:
-        // 1. Initialize the output buffer based on self.format.
-        // 2. Iterate over each file path in `file_paths`.
-        // 3. Retrieve the file content and its extracted `Bone`s from `self.cache` / `self.parser`.
-        // 4. For each active plugin (where `detect` returned true), call `enrich` on the bones.
-        // 5. Format the file content and the enriched bones into the output buffer (XML or Markdown).
-        // 6. Return the final packed string.
+        // 1. Generate an AST-aware Skeleton Map (indented tree map of requested files and their Bones from the SQLite cache) at the top of the output string.
+        // 2. Initialize the output buffer based on self.format.
+        // 3. Iterate over each file path in `file_paths`.
+        // 4. Retrieve the file content and its extracted `Bone`s from `self.cache` / `self.parser`.
+        // 5. For each active plugin (where `detect` returned true), call `enrich` on the bones.
+        // 6. Token Governor: Use `tiktoken-rs` to count tokens of the current output. If adding the full file content exceeds `max_tokens`, gracefully degrade by only printing the "bones" (signatures) for this and subsequent files.
+        // 7. Format the file content (or just bones) and the enriched bones into the output buffer (XML or Markdown).
+        // 8. Return the final packed string.
         todo!("Implement the packing logic")
     }
 }
@@ -91,3 +95,5 @@ The test-writing agent must implement the following strict TDD unit tests for th
 4. **`test_packer_with_plugins`**: Register a mock plugin that injects specific metadata. Call `pack` and verify that the resulting XML/Markdown output includes the injected metadata for the relevant files.
 5. **`test_packer_empty_file_list`**: Call `pack` with an empty `file_paths` slice. Verify it returns a valid, empty representation of the chosen format without erroring.
 6. **`test_packer_missing_file`**: Call `pack` with a file path that does not exist in the cache. Verify that the `Packer` either returns an appropriate `anyhow::Error` or gracefully skips the file and logs a warning, depending on the desired error-handling policy.
+7. **`test_packer_generates_skeleton_map_at_top`**: Verify that the `Packer` generates an AST-aware tree map of the requested files and their `Bone`s at the top of the output string.
+8. **`test_packer_token_governor_degrades_to_bones`**: Verify that when `max_tokens` is exceeded, the `Packer` gracefully degrades by only printing the "bones" (signatures) for the current and subsequent files, rather than the full file content.
