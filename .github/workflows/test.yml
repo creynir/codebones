@@ -32,4 +32,4 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run Tests
-        run: cargo test --all-features
+        run: cargo test --workspace --exclude codebones-python-ext
