@@ -1,6 +1,6 @@
 [package]
 name = "codebones-python-ext"
-version = "0.1.3"
+version = "0.1.4"
 edition = "2021"
 description = "Python bindings for codebones"
 license = "MIT"
@@ -11,9 +11,21 @@ name = "codebones_python_ext"
 crate-type = ["cdylib", "rlib"]
 test = false
 
+[[bin]]
+name = "codebones"
+path = "../cli/src/main.rs"
+
+[[bin]]
+name = "codebones-mcp"
+path = "../mcp/src/main.rs"
+
 [dependencies]
-codebones-core = { path = "../core", version = "0.1.3" }
+codebones-core = { path = "../core", version = "0.1.4" }
 pyo3 = { version = "0.28.2", features = ["abi3-py310"] }
+clap = { version = "4.6.0", features = ["derive"] }
+tokio = { version = "1.50.0", features = ["full"] }
+rmcp = "1.2.0"
+anyhow = "1.0.102"
 
 [features]
 extension-module = ["pyo3/extension-module"]
