@@ -1,5 +1,7 @@
 use rusqlite::Connection;
 
+pub struct Cache {}
+
 #[derive(Debug, Clone)]
 pub struct FileRecord {
     pub id: i64,

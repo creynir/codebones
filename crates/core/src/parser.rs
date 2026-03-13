@@ -2,6 +2,13 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use tree_sitter::{Language, Node};
 
+#[derive(Debug, Clone, Default)]
+pub struct Bone {
+    pub metadata: HashMap<String, String>,
+}
+
+pub struct Parser {}
+
 /// Represents the type of symbol extracted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SymbolKind {
