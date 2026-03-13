@@ -1,0 +1,7 @@
+[package]
+name = "codebones-mcp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+codebones-core = { path = "../core" }

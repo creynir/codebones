@@ -1,6 +1,8 @@
-[package]
-name = "codebones"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
+[workspace]
+members = [
+    "crates/core",
+    "crates/cli",
+    "crates/mcp",
+    "crates/python-ext"
+]
+resolver = "2"
