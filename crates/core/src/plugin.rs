@@ -1,4 +1,4 @@
-use crate::cache::{CacheStore, SqliteCache};
+use crate::cache::SqliteCache;
 use crate::parser::Bone;
 use crate::parser::Parser;
 use anyhow::Result;
@@ -155,6 +155,11 @@ impl Packer {
 
         let bpe = tiktoken_rs::cl100k_base().unwrap();
         let mut degrade_to_bones = false;
+        
+        let re_empty_lines = regex::Regex::new(r"\n\s*\n").unwrap();
+        let re_base64 = regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").unwrap();
+        let re_line_comment = regex::Regex::new(r"(?m)(//|#).*\n").unwrap();
+        let re_block_comment = regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap();
 
         for path in file_paths {
             let mut raw_content = if path.to_string_lossy() == "test.rs" {
@@ -175,14 +180,12 @@ impl Packer {
             };
             
             if self.remove_empty_lines {
-                let re = regex::Regex::new(r"\n\s*\n").unwrap();
-                raw_content = re.replace_all(&raw_content, "\n").to_string();
+                raw_content = re_empty_lines.replace_all(&raw_content, "\n").to_string();
             }
 
             if self.truncate_base64 {
                 // Truncate long hex or base64 looking strings (length > 100)
-                let re = regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").unwrap();
-                raw_content = re.replace_all(&raw_content, "[TRUNCATED_BASE64]").to_string();
+                raw_content = re_base64.replace_all(&raw_content, "[TRUNCATED_BASE64]").to_string();
             }
 
             // Generate the skeleton by eliding function/class bodies
@@ -219,19 +222,15 @@ impl Packer {
                     
                     if self.remove_comments {
                         // Simple regex fallback for comments (C-style, Python, HTML)
-                        let re_line = regex::Regex::new(r"(?m)(//|#).*\n").unwrap();
-                        let re_block = regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap();
-                        result = re_block.replace_all(&result, "").to_string();
-                        result = re_line.replace_all(&result, "\n").to_string();
+                        result = re_block_comment.replace_all(&result, "").to_string();
+                        result = re_line_comment.replace_all(&result, "\n").to_string();
                     }
                     
                     result
                 } else {
                     if self.remove_comments {
-                        let re_line = regex::Regex::new(r"(?m)(//|#).*\n").unwrap();
-                        let re_block = regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap();
-                        let no_blocks = re_block.replace_all(&raw_content, "").to_string();
-                        re_line.replace_all(&no_blocks, "\n").to_string()
+                        let no_blocks = re_block_comment.replace_all(&raw_content, "").to_string();
+                        re_line_comment.replace_all(&no_blocks, "\n").to_string()
                     } else {
                         raw_content.clone() // Fallback to raw content if language isn't supported
                     }
