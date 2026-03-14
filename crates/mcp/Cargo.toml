@@ -1,6 +1,6 @@
 [package]
 name = "codebones-mcp"
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 description = "MCP server for codebones: an AST-aware code indexing and context extraction tool"
 license = "MIT"

@@ -97,7 +97,11 @@ impl Packer {
                     Ok(c) => c,
                     Err(e) => {
                         // Skip unreadable files gracefully (e.g. they were deleted since indexing)
-                        eprintln!("Warning: skipping unreadable file {}: {}", path.display(), e);
+                        eprintln!(
+                            "Warning: skipping unreadable file {}: {}",
+                            path.display(),
+                            e
+                        );
                         continue;
                     }
                 }
