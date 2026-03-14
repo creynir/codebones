@@ -83,9 +83,11 @@ impl Packer {
                 while let Ok(Some(row)) = rows.next() {
                     let id: i64 = row.get(0).unwrap_or(0);
                     let db_path: String = row.get(1).unwrap_or_default();
-                    
+
                     let mut symbols = Vec::new();
-                    if let Ok(mut sym_stmt) = self.cache.conn.prepare("SELECT kind, name FROM symbols WHERE file_id = ? ORDER BY byte_offset ASC") {
+                    if let Ok(mut sym_stmt) = self.cache.conn.prepare(
+                        "SELECT kind, name FROM symbols WHERE file_id = ? ORDER BY byte_offset ASC",
+                    ) {
                         if let Ok(mut sym_rows) = sym_stmt.query([id]) {
                             while let Ok(Some(sym_row)) = sym_rows.next() {
                                 let kind: String = sym_row.get(0).unwrap_or_default();
@@ -114,13 +116,20 @@ impl Packer {
                         let path_str = path.to_string_lossy().to_string();
                         let path_normalized = path_str.strip_prefix("./").unwrap_or(&path_str);
                         // Match the correct DB file path using ends_with since path_str may contain dir prefix
-                        let symbols = db_files_symbols.iter()
-                            .find(|(db_p, _)| path_normalized.ends_with(db_p.as_str()) || db_p.ends_with(path_normalized))
+                        let symbols = db_files_symbols
+                            .iter()
+                            .find(|(db_p, _)| {
+                                path_normalized.ends_with(db_p.as_str())
+                                    || db_p.ends_with(path_normalized)
+                            })
                             .map(|(_, syms)| syms.clone())
                             .unwrap_or_default();
-                            
+
                         for (kind, name) in symbols {
-                            output.push_str(&format!("      <signature>{} {}</signature>\n", kind, name));
+                            output.push_str(&format!(
+                                "      <signature>{} {}</signature>\n",
+                                kind, name
+                            ));
                         }
                         output.push_str("    </file>\n");
                     }
@@ -132,11 +141,15 @@ impl Packer {
                         output.push_str(&format!("- {}\n", path.display()));
                         let path_str = path.to_string_lossy().to_string();
                         let path_normalized = path_str.strip_prefix("./").unwrap_or(&path_str);
-                        let symbols = db_files_symbols.iter()
-                            .find(|(db_p, _)| path_normalized.ends_with(db_p.as_str()) || db_p.ends_with(path_normalized))
+                        let symbols = db_files_symbols
+                            .iter()
+                            .find(|(db_p, _)| {
+                                path_normalized.ends_with(db_p.as_str())
+                                    || db_p.ends_with(path_normalized)
+                            })
                             .map(|(_, syms)| syms.clone())
                             .unwrap_or_default();
-                            
+
                         for (kind, name) in symbols {
                             output.push_str(&format!("  - {} {}\n", kind, name));
                         }
@@ -155,7 +168,7 @@ impl Packer {
 
         let bpe = tiktoken_rs::cl100k_base().unwrap();
         let mut degrade_to_bones = false;
-        
+
         let re_empty_lines = regex::Regex::new(r"\n\s*\n").unwrap();
         let re_base64 = regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").unwrap();
         let re_line_comment = regex::Regex::new(r"(?m)(//|#).*\n").unwrap();
@@ -178,14 +191,16 @@ impl Packer {
                     }
                 }
             };
-            
+
             if self.remove_empty_lines {
                 raw_content = re_empty_lines.replace_all(&raw_content, "\n").to_string();
             }
 
             if self.truncate_base64 {
                 // Truncate long hex or base64 looking strings (length > 100)
-                raw_content = re_base64.replace_all(&raw_content, "[TRUNCATED_BASE64]").to_string();
+                raw_content = re_base64
+                    .replace_all(&raw_content, "[TRUNCATED_BASE64]")
+                    .to_string();
             }
 
             // Generate the skeleton by eliding function/class bodies
@@ -198,7 +213,7 @@ impl Packer {
 
                     let mut sorted_symbols = doc.symbols.clone();
                     sorted_symbols.sort_by_key(|s| s.full_range.start);
-                    
+
                     // Always remove comment nodes if remove_comments is true
                     if self.remove_comments {
                         // Using our parser to extract comment ranges would require returning them in doc
@@ -219,13 +234,13 @@ impl Packer {
                         }
                     }
                     result.push_str(&raw_content[last_end..]);
-                    
+
                     if self.remove_comments {
                         // Simple regex fallback for comments (C-style, Python, HTML)
                         result = re_block_comment.replace_all(&result, "").to_string();
                         result = re_line_comment.replace_all(&result, "\n").to_string();
                     }
-                    
+
                     result
                 } else {
                     if self.remove_comments {
@@ -260,7 +275,10 @@ impl Packer {
                     output.push_str(&format!("  <file path=\"{}\">\n", path.display()));
                     if !degrade_to_bones {
                         let safe_content = content.replace("]]>", "]]]]><![CDATA[>");
-                        output.push_str(&format!("    <content><![CDATA[\n{}\n]]></content>\n", safe_content));
+                        output.push_str(&format!(
+                            "    <content><![CDATA[\n{}\n]]></content>\n",
+                            safe_content
+                        ));
                     }
                     // Only print bones block if plugins added metadata
                     let has_metadata = bones.iter().any(|b| !b.metadata.is_empty());
@@ -341,7 +359,17 @@ mod tests {
 
     #[test]
     fn test_packer_xml_format() {
-        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -350,7 +378,17 @@ mod tests {
 
     #[test]
     fn test_packer_markdown_format() {
-        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Markdown, None, false, false, false, false, false);
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Markdown,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -359,7 +397,17 @@ mod tests {
 
     #[test]
     fn test_packer_with_plugins() {
-        let mut packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
+        let mut packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
         packer.register_plugin(Box::new(MockPlugin));
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
@@ -369,14 +417,34 @@ mod tests {
 
     #[test]
     fn test_packer_empty_file_list() {
-        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
         let result = packer.pack(&[]);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_packer_missing_file() {
-        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
         let result = packer.pack(&[PathBuf::from("missing.rs")]);
         // Missing files are now skipped gracefully
         assert!(result.is_ok());
@@ -384,7 +452,17 @@ mod tests {
 
     #[test]
     fn test_packer_generates_skeleton_map_at_top() {
-        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -395,7 +473,17 @@ mod tests {
     #[test]
     fn test_packer_token_governor_degrades_to_bones() {
         // Set a very low max_tokens to force degradation
-        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, Some(10), false, false, false, false, false);
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            Some(10),
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
