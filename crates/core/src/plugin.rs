@@ -93,7 +93,14 @@ impl Packer {
             let content = if path.to_string_lossy() == "test.rs" {
                 "dummy content".to_string()
             } else {
-                std::fs::read_to_string(path)?
+                match std::fs::read_to_string(path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        // Skip unreadable files gracefully (e.g. they were deleted since indexing)
+                        eprintln!("Warning: skipping unreadable file {}: {}", path.display(), e);
+                        continue;
+                    }
+                }
             };
             let mut bones = vec![Bone::default()];
 

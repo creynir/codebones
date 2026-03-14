@@ -152,6 +152,9 @@ pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
 }
 
 pub fn pack(dir: &Path, format_str: &str) -> Result<String> {
+    // Ensure the cache is up to date before packing
+    index(dir)?;
+
     let db_path = dir.join("codebones.db");
     let cache = SqliteCache::new(db_path.to_str().unwrap())?;
     cache.init()?;
@@ -173,7 +176,12 @@ pub fn pack(dir: &Path, format_str: &str) -> Result<String> {
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     let mut paths = Vec::new();
     for row in rows {
-        paths.push(dir.join(row?));
+        let path_str = row?;
+        // Convert the string path back to a PathBuf relative to `dir`
+        let file_path = dir.join(path_str);
+        if file_path.exists() {
+            paths.push(file_path);
+        }
     }
 
     packer.pack(&paths)
