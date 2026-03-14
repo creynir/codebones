@@ -151,11 +151,28 @@ pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
     Ok(results)
 }
 
-pub fn pack(dir: &Path, format_str: &str) -> Result<String> {
-    // Ensure the cache is up to date before packing
-    index(dir)?;
+pub struct PackOptions {
+    pub no_file_summary: bool,
+    pub no_files: bool,
+    pub remove_comments: bool,
+    pub remove_empty_lines: bool,
+    pub truncate_base64: bool,
+    pub include: Option<Vec<String>>,
+    pub ignore: Option<Vec<String>>,
+}
 
-    let db_path = dir.join("codebones.db");
+pub fn pack(dir: &Path, format_str: &str, max_tokens: Option<usize>, options: PackOptions) -> Result<String> {
+    // If the provided dir is actually a file, use its parent directory for the database
+    let base_dir = if dir.is_file() {
+        dir.parent().unwrap_or(Path::new("."))
+    } else {
+        dir
+    };
+
+    // Ensure the cache is up to date before packing
+    index(base_dir)?;
+
+    let db_path = base_dir.join("codebones.db");
     let cache = SqliteCache::new(db_path.to_str().unwrap())?;
     cache.init()?;
 
@@ -164,25 +181,74 @@ pub fn pack(dir: &Path, format_str: &str) -> Result<String> {
         _ => OutputFormat::Markdown,
     };
 
-    let packer = Packer::new(
-        crate::cache::Cache {},
-        crate::parser::Parser {},
-        format,
-        None,
-    );
-
     // Get all files
-    let mut stmt = cache.conn.prepare("SELECT path FROM files")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
     let mut paths = Vec::new();
-    for row in rows {
-        let path_str = row?;
-        // Convert the string path back to a PathBuf relative to `dir`
-        let file_path = dir.join(path_str);
-        if file_path.exists() {
-            paths.push(file_path);
+    {
+        let mut stmt = cache.conn.prepare("SELECT path FROM files")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        
+        let mut include_builder = globset::GlobSetBuilder::new();
+        let mut has_includes = false;
+        if let Some(includes) = &options.include {
+            for pattern in includes {
+                if let Ok(glob) = globset::Glob::new(pattern) {
+                    include_builder.add(glob);
+                    has_includes = true;
+                }
+            }
+        }
+        let include_set = include_builder.build().unwrap_or(globset::GlobSet::empty());
+
+        let mut ignore_builder = globset::GlobSetBuilder::new();
+        let mut has_ignores = false;
+        if let Some(ignores) = &options.ignore {
+            for pattern in ignores {
+                if let Ok(glob) = globset::Glob::new(pattern) {
+                    ignore_builder.add(glob);
+                    has_ignores = true;
+                }
+            }
+        }
+        let ignore_set = ignore_builder.build().unwrap_or(globset::GlobSet::empty());
+
+        for row in rows {
+            let path_str = row?;
+            
+            if has_includes && !include_set.is_match(&path_str) {
+                continue;
+            }
+            if has_ignores && ignore_set.is_match(&path_str) {
+                continue;
+            }
+
+            let file_path = base_dir.join(&path_str);
+            
+            // If the user specified a file rather than a directory, only include that specific file
+            if dir.is_file() {
+                let dir_canon = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+                let file_canon = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
+                if file_canon != dir_canon {
+                    continue;
+                }
+            }
+
+            if file_path.exists() {
+                paths.push(file_path);
+            }
         }
     }
+
+        let packer = Packer::new(
+        cache,
+        crate::parser::Parser {},
+        format,
+        max_tokens,
+        options.no_file_summary,
+        options.no_files,
+        options.remove_comments,
+        options.remove_empty_lines,
+        options.truncate_base64,
+    );
 
     packer.pack(&paths)
 }

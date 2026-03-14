@@ -1,4 +1,4 @@
-use crate::cache::Cache;
+use crate::cache::{CacheStore, SqliteCache};
 use crate::parser::Bone;
 use crate::parser::Parser;
 use anyhow::Result;
@@ -25,20 +25,31 @@ pub enum OutputFormat {
 
 /// Bundles files and their enriched bones into an AI-friendly output format.
 pub struct Packer {
-    cache: Cache,
+    cache: SqliteCache,
     parser: Parser,
     plugins: Vec<Box<dyn ContextPlugin>>,
     format: OutputFormat,
     max_tokens: Option<usize>,
+    no_file_summary: bool,
+    no_files: bool,
+    remove_comments: bool,
+    remove_empty_lines: bool,
+    truncate_base64: bool,
 }
 
 impl Packer {
     /// Creates a new Packer instance.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        cache: Cache,
+        cache: SqliteCache,
         parser: Parser,
         format: OutputFormat,
         max_tokens: Option<usize>,
+        no_file_summary: bool,
+        no_files: bool,
+        remove_comments: bool,
+        remove_empty_lines: bool,
+        truncate_base64: bool,
     ) -> Self {
         Self {
             cache,
@@ -46,6 +57,11 @@ impl Packer {
             plugins: Vec::new(),
             format,
             max_tokens,
+            no_file_summary,
+            no_files,
+            remove_comments,
+            remove_empty_lines,
+            truncate_base64,
         }
     }
 
@@ -56,10 +72,32 @@ impl Packer {
 
     /// Packs the specified files into a single formatted string.
     pub fn pack(&self, file_paths: &[PathBuf]) -> Result<String> {
-        let _ = &self.cache;
         let _ = &self.parser;
 
         let mut output = String::new();
+
+        // Retrieve all files and their symbols from DB to build the skeleton map
+        let mut db_files_symbols: Vec<(String, Vec<(String, String)>)> = Vec::new();
+        if let Ok(mut stmt) = self.cache.conn.prepare("SELECT id, path FROM files") {
+            if let Ok(mut rows) = stmt.query([]) {
+                while let Ok(Some(row)) = rows.next() {
+                    let id: i64 = row.get(0).unwrap_or(0);
+                    let db_path: String = row.get(1).unwrap_or_default();
+                    
+                    let mut symbols = Vec::new();
+                    if let Ok(mut sym_stmt) = self.cache.conn.prepare("SELECT kind, name FROM symbols WHERE file_id = ? ORDER BY byte_offset ASC") {
+                        if let Ok(mut sym_rows) = sym_stmt.query([id]) {
+                            while let Ok(Some(sym_row)) = sym_rows.next() {
+                                let kind: String = sym_row.get(0).unwrap_or_default();
+                                let name: String = sym_row.get(1).unwrap_or_default();
+                                symbols.push((kind, name));
+                            }
+                        }
+                    }
+                    db_files_symbols.push((db_path, symbols));
+                }
+            }
+        }
 
         match self.format {
             OutputFormat::Xml => output.push_str("<repository>\n"),
@@ -67,30 +105,59 @@ impl Packer {
         }
 
         // Generate Skeleton Map
-        match self.format {
-            OutputFormat::Xml => {
-                output.push_str("  <skeleton_map>\n");
-                for path in file_paths {
-                    output.push_str(&format!("    <file path=\"{}\">\n", path.display()));
-                    // Bones would be listed here in a real implementation
-                    output.push_str("    </file>\n");
+        if !self.no_file_summary {
+            match self.format {
+                OutputFormat::Xml => {
+                    output.push_str("  <skeleton_map>\n");
+                    for path in file_paths {
+                        output.push_str(&format!("    <file path=\"{}\">\n", path.display()));
+                        let path_str = path.to_string_lossy().to_string();
+                        let path_normalized = path_str.strip_prefix("./").unwrap_or(&path_str);
+                        // Match the correct DB file path using ends_with since path_str may contain dir prefix
+                        let symbols = db_files_symbols.iter()
+                            .find(|(db_p, _)| path_normalized.ends_with(db_p.as_str()) || db_p.ends_with(path_normalized))
+                            .map(|(_, syms)| syms.clone())
+                            .unwrap_or_default();
+                            
+                        for (kind, name) in symbols {
+                            output.push_str(&format!("      <signature>{} {}</signature>\n", kind, name));
+                        }
+                        output.push_str("    </file>\n");
+                    }
+                    output.push_str("  </skeleton_map>\n");
                 }
-                output.push_str("  </skeleton_map>\n");
-            }
-            OutputFormat::Markdown => {
-                output.push_str("## Skeleton Map\n\n");
-                for path in file_paths {
-                    output.push_str(&format!("- {}\n", path.display()));
+                OutputFormat::Markdown => {
+                    output.push_str("## Skeleton Map\n\n");
+                    for path in file_paths {
+                        output.push_str(&format!("- {}\n", path.display()));
+                        let path_str = path.to_string_lossy().to_string();
+                        let path_normalized = path_str.strip_prefix("./").unwrap_or(&path_str);
+                        let symbols = db_files_symbols.iter()
+                            .find(|(db_p, _)| path_normalized.ends_with(db_p.as_str()) || db_p.ends_with(path_normalized))
+                            .map(|(_, syms)| syms.clone())
+                            .unwrap_or_default();
+                            
+                        for (kind, name) in symbols {
+                            output.push_str(&format!("  - {} {}\n", kind, name));
+                        }
+                    }
+                    output.push('\n');
                 }
-                output.push('\n');
             }
+        }
+
+        if self.no_files {
+            if let OutputFormat::Xml = self.format {
+                output.push_str("</repository>\n");
+            }
+            return Ok(output);
         }
 
         let bpe = tiktoken_rs::cl100k_base().unwrap();
         let mut degrade_to_bones = false;
 
         for path in file_paths {
-            let content = if path.to_string_lossy() == "test.rs" {
+            let mut raw_content = if path.to_string_lossy() == "test.rs" {
                 "dummy content".to_string()
             } else {
                 match std::fs::read_to_string(path) {
@@ -106,6 +173,71 @@ impl Packer {
                     }
                 }
             };
+            
+            if self.remove_empty_lines {
+                let re = regex::Regex::new(r"\n\s*\n").unwrap();
+                raw_content = re.replace_all(&raw_content, "\n").to_string();
+            }
+
+            if self.truncate_base64 {
+                // Truncate long hex or base64 looking strings (length > 100)
+                let re = regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").unwrap();
+                raw_content = re.replace_all(&raw_content, "[TRUNCATED_BASE64]").to_string();
+            }
+
+            // Generate the skeleton by eliding function/class bodies
+            let content = {
+                let ext = path.extension().unwrap_or_default().to_string_lossy();
+                if let Some(spec) = crate::parser::get_spec_for_extension(&ext) {
+                    let doc = crate::parser::parse_file(&raw_content, &spec);
+                    let mut result = String::new();
+                    let mut last_end = 0;
+
+                    let mut sorted_symbols = doc.symbols.clone();
+                    sorted_symbols.sort_by_key(|s| s.full_range.start);
+                    
+                    // Always remove comment nodes if remove_comments is true
+                    if self.remove_comments {
+                        // Using our parser to extract comment ranges would require returning them in doc
+                        // For simplicity, we can do a regex pass for common comments if we can't extract them from tree-sitter easily
+                        // A better approach is to add comments to the Document struct in the parser
+                        // We will implement regex fallback for now to avoid altering the parser trait right now
+                        let _is_in_block_comment = false;
+                        let _block_start = 0;
+                    }
+
+                    for sym in sorted_symbols {
+                        if let Some(body_range) = &sym.body_range {
+                            if body_range.start >= last_end {
+                                result.push_str(&raw_content[last_end..body_range.start]);
+                                result.push_str("...");
+                                last_end = body_range.end;
+                            }
+                        }
+                    }
+                    result.push_str(&raw_content[last_end..]);
+                    
+                    if self.remove_comments {
+                        // Simple regex fallback for comments (C-style, Python, HTML)
+                        let re_line = regex::Regex::new(r"(?m)(//|#).*\n").unwrap();
+                        let re_block = regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap();
+                        result = re_block.replace_all(&result, "").to_string();
+                        result = re_line.replace_all(&result, "\n").to_string();
+                    }
+                    
+                    result
+                } else {
+                    if self.remove_comments {
+                        let re_line = regex::Regex::new(r"(?m)(//|#).*\n").unwrap();
+                        let re_block = regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap();
+                        let no_blocks = re_block.replace_all(&raw_content, "").to_string();
+                        re_line.replace_all(&no_blocks, "\n").to_string()
+                    } else {
+                        raw_content.clone() // Fallback to raw content if language isn't supported
+                    }
+                }
+            };
+
             let mut bones = vec![Bone::default()];
 
             for plugin in &self.plugins {
@@ -128,18 +260,23 @@ impl Packer {
                 OutputFormat::Xml => {
                     output.push_str(&format!("  <file path=\"{}\">\n", path.display()));
                     if !degrade_to_bones {
-                        output.push_str(&format!("    <content>{}</content>\n", content));
+                        let safe_content = content.replace("]]>", "]]]]><![CDATA[>");
+                        output.push_str(&format!("    <content><![CDATA[\n{}\n]]></content>\n", safe_content));
                     }
-                    output.push_str("    <bones>\n");
-                    for bone in &bones {
-                        for (k, v) in &bone.metadata {
-                            output.push_str(&format!(
-                                "      <metadata key=\"{}\">{}</metadata>\n",
-                                k, v
-                            ));
+                    // Only print bones block if plugins added metadata
+                    let has_metadata = bones.iter().any(|b| !b.metadata.is_empty());
+                    if has_metadata {
+                        output.push_str("    <bones>\n");
+                        for bone in &bones {
+                            for (k, v) in &bone.metadata {
+                                output.push_str(&format!(
+                                    "      <metadata key=\"{}\">{}</metadata>\n",
+                                    k, v
+                                ));
+                            }
                         }
+                        output.push_str("    </bones>\n");
                     }
-                    output.push_str("    </bones>\n");
                     output.push_str("  </file>\n");
                 }
                 OutputFormat::Markdown => {
@@ -147,20 +284,23 @@ impl Packer {
                     if !degrade_to_bones {
                         output.push_str(&format!("```\n{}\n```\n\n", content));
                     }
-                    output.push_str("Bones:\n");
-                    for bone in &bones {
-                        for (k, v) in &bone.metadata {
-                            output.push_str(&format!("- {}: {}\n", k, v));
+                    // Only print Bones section if plugins added metadata
+                    let has_metadata = bones.iter().any(|b| !b.metadata.is_empty());
+                    if has_metadata {
+                        output.push_str("Bones:\n");
+                        for bone in &bones {
+                            for (k, v) in &bone.metadata {
+                                output.push_str(&format!("- {}: {}\n", k, v));
+                            }
                         }
+                        output.push('\n');
                     }
-                    output.push('\n');
                 }
             }
         }
 
-        match self.format {
-            OutputFormat::Xml => output.push_str("</repository>\n"),
-            OutputFormat::Markdown => {}
+        if let OutputFormat::Xml = self.format {
+            output.push_str("</repository>\n");
         }
 
         Ok(output)
@@ -202,7 +342,7 @@ mod tests {
 
     #[test]
     fn test_packer_xml_format() {
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
+        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -211,7 +351,7 @@ mod tests {
 
     #[test]
     fn test_packer_markdown_format() {
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Markdown, None);
+        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Markdown, None, false, false, false, false, false);
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -220,7 +360,7 @@ mod tests {
 
     #[test]
     fn test_packer_with_plugins() {
-        let mut packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
+        let mut packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
         packer.register_plugin(Box::new(MockPlugin));
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
@@ -230,14 +370,14 @@ mod tests {
 
     #[test]
     fn test_packer_empty_file_list() {
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
+        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
         let result = packer.pack(&[]);
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_packer_missing_file() {
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
+        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
         let result = packer.pack(&[PathBuf::from("missing.rs")]);
         // Missing files are now skipped gracefully
         assert!(result.is_ok());
@@ -245,7 +385,7 @@ mod tests {
 
     #[test]
     fn test_packer_generates_skeleton_map_at_top() {
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
+        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, None, false, false, false, false, false);
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
@@ -256,12 +396,11 @@ mod tests {
     #[test]
     fn test_packer_token_governor_degrades_to_bones() {
         // Set a very low max_tokens to force degradation
-        let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, Some(10));
+        let packer = Packer::new(SqliteCache::new_in_memory().unwrap(), Parser {}, OutputFormat::Xml, Some(10), false, false, false, false, false);
         let result = packer.pack(&[PathBuf::from("test.rs")]);
         assert!(result.is_ok());
         let output = result.unwrap();
-        // It should contain bones but not the full "dummy content"
+        // It should not contain the full "dummy content"
         assert!(!output.contains("dummy content"));
-        assert!(output.contains("<bones>"));
     }
 }

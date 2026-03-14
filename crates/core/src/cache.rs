@@ -38,6 +38,9 @@ pub trait CacheStore {
 
     /// Delete a file and cascade delete its symbols
     fn delete_file(&self, path: &str) -> rusqlite::Result<()>;
+
+    /// Get symbols for a file
+    fn get_file_symbols(&self, path: &str) -> rusqlite::Result<Vec<(String, String)>>;
 }
 
 pub struct SqliteCache {
@@ -146,6 +149,23 @@ impl CacheStore for SqliteCache {
         self.conn
             .execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
         Ok(())
+    }
+
+    fn get_file_symbols(&self, path: &str) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.kind, s.name FROM symbols s
+             JOIN files f ON s.file_id = f.id
+             WHERE f.path = ?1
+             ORDER BY s.byte_offset ASC"
+        )?;
+        let mut rows = stmt.query(rusqlite::params![path])?;
+        let mut symbols = Vec::new();
+        while let Some(row) = rows.next()? {
+            let kind: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            symbols.push((kind, name));
+        }
+        Ok(symbols)
     }
 }
 

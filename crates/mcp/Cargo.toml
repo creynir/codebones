@@ -1,6 +1,6 @@
 [package]
 name = "codebones-mcp"
-version = "0.1.6"
+version = "0.2.0"
 edition = "2021"
 description = "MCP server for codebones: an AST-aware code indexing and context extraction tool"
 license = "MIT"
@@ -8,6 +8,6 @@ repository = "https://github.com/creynir/codebones"
 
 [dependencies]
 anyhow = "1.0.102"
-codebones-core = { path = "../core", version = "0.1.3" }
+codebones-core = { path = "../core", version = "0.2.0" }
 rmcp = "1.2.0"
 tokio = { version = "1.50.0", features = ["full"] }

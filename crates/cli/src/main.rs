@@ -37,8 +37,32 @@ pub enum Commands {
         #[arg(default_value = ".")]
         dir: PathBuf,
         /// Output format (e.g., xml, markdown)
-        #[arg(short, long, default_value = "markdown")]
+        #[arg(short, long, default_value = "xml")]
         format: String,
+        /// Maximum tokens allowed in the output
+        #[arg(short, long)]
+        max_tokens: Option<usize>,
+        /// Do not print the file summary/skeleton map at the top
+        #[arg(long)]
+        no_file_summary: bool,
+        /// Only print the summary, do not print file contents
+        #[arg(long)]
+        no_files: bool,
+        /// Remove all comments from the code
+        #[arg(long)]
+        remove_comments: bool,
+        /// Remove consecutive empty lines
+        #[arg(long)]
+        remove_empty_lines: bool,
+        /// Truncate long base64/hex strings in the output
+        #[arg(long)]
+        truncate_base64: bool,
+        /// Glob patterns to explicitly include (e.g., "**/*.rs")
+        #[arg(long)]
+        include: Option<Vec<String>>,
+        /// Glob patterns to ignore (e.g., "**/test_*")
+        #[arg(long)]
+        ignore: Option<Vec<String>>,
     },
 }
 
@@ -65,8 +89,32 @@ fn main() -> anyhow::Result<()> {
                 println!("{}", res);
             }
         }
-        Commands::Pack { dir, format } => {
-            let result = codebones_core::api::pack(&dir, &format)?;
+        Commands::Pack {
+            dir,
+            format,
+            max_tokens,
+            no_file_summary,
+            no_files,
+            remove_comments,
+            remove_empty_lines,
+            truncate_base64,
+            include,
+            ignore,
+        } => {
+            let result = codebones_core::api::pack(
+                &dir,
+                &format,
+                max_tokens,
+                codebones_core::api::PackOptions {
+                    no_file_summary,
+                    no_files,
+                    remove_comments,
+                    remove_empty_lines,
+                    truncate_base64,
+                    include,
+                    ignore,
+                },
+            )?;
             println!("{}", result);
         }
     }
