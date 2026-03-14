@@ -6,11 +6,6 @@ description = "Python bindings for codebones"
 license = "MIT"
 repository = "https://github.com/creynir/codebones"
 
-[lib]
-name = "codebones_python_ext"
-crate-type = ["cdylib", "rlib"]
-test = false
-
 [[bin]]
 name = "codebones"
 path = "../cli/src/main.rs"
@@ -21,14 +16,8 @@ path = "../mcp/src/main.rs"
 
 [dependencies]
 codebones-core = { path = "../core", version = "0.1.4" }
-pyo3 = { version = "0.28.2", features = ["abi3-py310"] }
 clap = { version = "4.6.0", features = ["derive"] }
 tokio = { version = "1.50.0", features = ["full"] }
 rmcp = "1.2.0"
 anyhow = "1.0.102"
 
-[features]
-extension-module = ["pyo3/extension-module"]
-
-[dev-dependencies]
-pyo3 = { version = "0.28.2", features = ["auto-initialize"] }
