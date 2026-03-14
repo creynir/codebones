@@ -239,7 +239,8 @@ mod tests {
     fn test_packer_missing_file() {
         let packer = Packer::new(Cache {}, Parser {}, OutputFormat::Xml, None);
         let result = packer.pack(&[PathBuf::from("missing.rs")]);
-        assert!(result.is_err());
+        // Missing files are now skipped gracefully
+        assert!(result.is_ok());
     }
 
     #[test]
