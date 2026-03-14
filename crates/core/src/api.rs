@@ -161,7 +161,12 @@ pub struct PackOptions {
     pub ignore: Option<Vec<String>>,
 }
 
-pub fn pack(dir: &Path, format_str: &str, max_tokens: Option<usize>, options: PackOptions) -> Result<String> {
+pub fn pack(
+    dir: &Path,
+    format_str: &str,
+    max_tokens: Option<usize>,
+    options: PackOptions,
+) -> Result<String> {
     // If the provided dir is actually a file, use its parent directory for the database
     let base_dir = if dir.is_file() {
         dir.parent().unwrap_or(Path::new("."))
@@ -186,7 +191,7 @@ pub fn pack(dir: &Path, format_str: &str, max_tokens: Option<usize>, options: Pa
     {
         let mut stmt = cache.conn.prepare("SELECT path FROM files")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        
+
         let mut include_builder = globset::GlobSetBuilder::new();
         let mut has_includes = false;
         if let Some(includes) = &options.include {
@@ -213,7 +218,7 @@ pub fn pack(dir: &Path, format_str: &str, max_tokens: Option<usize>, options: Pa
 
         for row in rows {
             let path_str = row?;
-            
+
             if has_includes && !include_set.is_match(&path_str) {
                 continue;
             }
@@ -222,11 +227,13 @@ pub fn pack(dir: &Path, format_str: &str, max_tokens: Option<usize>, options: Pa
             }
 
             let file_path = base_dir.join(&path_str);
-            
+
             // If the user specified a file rather than a directory, only include that specific file
             if dir.is_file() {
                 let dir_canon = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
-                let file_canon = file_path.canonicalize().unwrap_or_else(|_| file_path.clone());
+                let file_canon = file_path
+                    .canonicalize()
+                    .unwrap_or_else(|_| file_path.clone());
                 if file_canon != dir_canon {
                     continue;
                 }
@@ -238,7 +245,7 @@ pub fn pack(dir: &Path, format_str: &str, max_tokens: Option<usize>, options: Pa
         }
     }
 
-        let packer = Packer::new(
+    let packer = Packer::new(
         cache,
         crate::parser::Parser {},
         format,

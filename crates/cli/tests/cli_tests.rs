@@ -27,7 +27,11 @@ pub struct DummyStruct;
 
     // Create a dummy base64 file
     let long_b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    fs::write(root.join("base64.txt"), format!("let b64 = \"{}\";", long_b64)).unwrap();
+    fs::write(
+        root.join("base64.txt"),
+        format!("let b64 = \"{}\";", long_b64),
+    )
+    .unwrap();
 
     temp
 }
@@ -59,7 +63,10 @@ fn test_get_and_outline() {
     let root = temp.path();
 
     let mut cmd = Command::cargo_bin("codebones").unwrap();
-    cmd.current_dir(root).args(["index", "."]).assert().success();
+    cmd.current_dir(root)
+        .args(["index", "."])
+        .assert()
+        .success();
 
     // Outline
     let mut cmd = Command::cargo_bin("codebones").unwrap();
@@ -68,7 +75,7 @@ fn test_get_and_outline() {
         .assert()
         .success()
         .stdout(predicate::str::contains("pub fn hello_world()"));
-        
+
     // Get file
     let mut cmd = Command::cargo_bin("codebones").unwrap();
     cmd.current_dir(root)
@@ -92,8 +99,10 @@ fn test_pack_base_xml() {
             predicate::str::contains("<repository>")
                 .and(predicate::str::contains("</repository>"))
                 .and(predicate::str::contains("<skeleton_map>"))
-                .and(predicate::str::contains("<signature>Function hello_world</signature>"))
-                .and(predicate::str::contains("<![CDATA["))
+                .and(predicate::str::contains(
+                    "<signature>Function hello_world</signature>",
+                ))
+                .and(predicate::str::contains("<![CDATA[")),
         );
 }
 
@@ -110,7 +119,7 @@ fn test_pack_markdown() {
         .stdout(
             predicate::str::contains("## Skeleton Map")
                 .and(predicate::str::contains("- ./dummy.rs"))
-                .and(predicate::str::contains("  - Function hello_world"))
+                .and(predicate::str::contains("  - Function hello_world")),
         );
 }
 
@@ -124,9 +133,7 @@ fn test_pack_flags_no_file_summary() {
         .args(["pack", ".", "--format", "xml", "--no-file-summary"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("<skeleton_map>").not()
-        );
+        .stdout(predicate::str::contains("<skeleton_map>").not());
 }
 
 #[test]
@@ -142,7 +149,7 @@ fn test_pack_flags_no_files() {
         .stdout(
             predicate::str::contains("<skeleton_map>")
                 .and(predicate::str::contains("<content>").not())
-                .and(predicate::str::contains("</repository>"))
+                .and(predicate::str::contains("</repository>")),
         );
 }
 
@@ -153,13 +160,21 @@ fn test_pack_flags_remove_comments_and_empty_lines() {
 
     let mut cmd = Command::cargo_bin("codebones").unwrap();
     cmd.current_dir(root)
-        .args(["pack", "dummy.rs", "--format", "xml", "--remove-comments", "--remove-empty-lines"])
+        .args([
+            "pack",
+            "dummy.rs",
+            "--format",
+            "xml",
+            "--remove-comments",
+            "--remove-empty-lines",
+        ])
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("A single line comment").not()
+            predicate::str::contains("A single line comment")
+                .not()
                 .and(predicate::str::contains("A block comment").not())
-                .and(predicate::str::contains("\n\n\n").not()) // Multiple newlines should be gone
+                .and(predicate::str::contains("\n\n\n").not()), // Multiple newlines should be gone
         );
 }
 
@@ -175,7 +190,7 @@ fn test_pack_flags_truncate_base64() {
         .success()
         .stdout(
             predicate::str::contains("[TRUNCATED_BASE64]")
-                .and(predicate::str::contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ").not())
+                .and(predicate::str::contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ").not()),
         );
 }
 
@@ -191,8 +206,7 @@ fn test_pack_flags_include_ignore() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("dummy.toml")
-                .and(predicate::str::contains("dummy.rs").not())
+            predicate::str::contains("dummy.toml").and(predicate::str::contains("dummy.rs").not()),
         );
 
     // Test ignore
@@ -202,7 +216,6 @@ fn test_pack_flags_include_ignore() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("dummy.rs")
-                .and(predicate::str::contains("dummy.toml").not())
+            predicate::str::contains("dummy.rs").and(predicate::str::contains("dummy.toml").not()),
         );
 }

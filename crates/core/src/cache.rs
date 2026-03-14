@@ -156,7 +156,7 @@ impl CacheStore for SqliteCache {
             "SELECT s.kind, s.name FROM symbols s
              JOIN files f ON s.file_id = f.id
              WHERE f.path = ?1
-             ORDER BY s.byte_offset ASC"
+             ORDER BY s.byte_offset ASC",
         )?;
         let mut rows = stmt.query(rusqlite::params![path])?;
         let mut symbols = Vec::new();
