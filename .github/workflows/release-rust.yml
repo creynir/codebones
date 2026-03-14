@@ -35,8 +35,8 @@ jobs:
 
       - name: Build CLI and MCP
         run: |
-          cargo build --release --bin codebones --target ${{ matrix.target }}
-          cargo build --release --bin codebones-mcp --target ${{ matrix.target }}
+          cargo build --release -p codebones --bin codebones --target ${{ matrix.target }}
+          cargo build --release -p codebones-mcp --bin codebones-mcp --target ${{ matrix.target }}
 
       - name: Prepare Assets (Unix)
         if: matrix.os != 'windows-latest'
