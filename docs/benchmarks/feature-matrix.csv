@@ -1,0 +1,10 @@
+tool,lookup_query,repo_index_build,structure_outline,context_pack,incremental_reindex_single,incremental_reindex_batch,time_to_query_after_change,changed_files_per_sec,notes
+codebones,ELIGIBLE,ELIGIBLE,ELIGIBLE,ELIGIBLE,ELIGIBLE,ELIGIBLE,ELIGIBLE,ELIGIBLE,Primary tool
+jcodemunch-mcp,ELIGIBLE,ELIGIBLE,ELIGIBLE,OUT_OF_SCOPE,ELIGIBLE,ELIGIBLE,ELIGIBLE,ELIGIBLE,MCP retrieval tool with local index
+ast-grep,ELIGIBLE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,Structural search without persistent index benchmark target
+grep-ast,ELIGIBLE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,AST-grep style search tool
+tree-sitter-mcp,ELIGIBLE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,CLI search/analysis with expensive parse-on-query behavior
+repomix,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,ELIGIBLE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,Context packing benchmark peer
+code-indexer-loop,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,Requires external embedding/API dependencies for fair run
+aider,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,General coding assistant not comparable for these semantic features
+code-chunk,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,OUT_OF_SCOPE,Chunking library not a full retrieval/index benchmark peer
