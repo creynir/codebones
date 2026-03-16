@@ -490,16 +490,19 @@ fn search_handles_empty_query_string() -> Result<(), Box<dyn std::error::Error>>
 }
 
 #[test]
-fn search_returns_error_when_no_index_exists() {
+fn search_on_fresh_dir_returns_empty_not_error() {
     let dir = TempDir::new().expect("failed to create tempdir");
-    // No codebones.db — search should fail gracefully (or return empty; implementations vary).
-    // Desired behavior: returns an error since there is no DB to query.
+    // No codebones.db — SqliteCache::new() auto-creates the DB via Connection::open(),
+    // so there is never a "no DB" state. A fresh directory has an empty index, not an error.
     let result = api::search(dir.path(), "anything");
-    // The current implementation opens/creates the DB lazily, so this may succeed with empty.
-    // The test documents the desired behavior: an explicit error when no index exists.
     assert!(
-        result.is_err(),
-        "search with no prior index should return an error (no codebones.db)"
+        result.is_ok(),
+        "search on a never-indexed directory should return Ok (DB is auto-created)"
+    );
+    let results = result.expect("search must succeed");
+    assert!(
+        results.is_empty(),
+        "search on a never-indexed directory should return an empty vec; got: {results:?}"
     );
 }
 
@@ -707,8 +710,9 @@ pub fn documented() -> i32 {
 fn pack_truncate_base64_replaces_long_base64_strings() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     // A string that looks like base64 and is >100 chars.
+    // Must be at module level (const/static) so the packer does not elide it as a function body.
     let long_b64 = "A".repeat(120);
-    let content = format!("pub fn encoded() -> &'static str {{\n    \"{long_b64}\"\n}}\n");
+    let content = format!("pub const ENCODED: &str = \"{long_b64}\";\n");
     fs::write(dir.path().join("b64.rs"), &content).expect("write b64 file");
 
     let options = PackOptions {
