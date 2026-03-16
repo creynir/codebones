@@ -263,7 +263,6 @@ dependencies = [
  "globset",
  "hex",
  "ignore",
- "once_cell",
  "regex",
  "rusqlite",
  "sha2",

@@ -6,6 +6,9 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
+/// Walks `dir`, hashes every eligible file, and upserts changed files and their symbols into the local SQLite cache.
+///
+/// Must be called before `get`, `outline`, or `search`; those functions read from the cache `index` populates.
 pub fn index(dir: &Path) -> Result<()> {
     let db_path = dir.join("codebones.db");
     let db_path_str = db_path
@@ -68,6 +71,9 @@ pub fn index(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Retrieves the raw source content of a symbol (using `::` notation) or a file path from the cache.
+///
+/// Returns an error if the symbol or path is not found; run `index` first to populate the cache.
 pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
     let db_path = dir.join("codebones.db");
     let db_path_str = db_path
@@ -91,6 +97,9 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
     anyhow::bail!("Symbol or path not found: {}", symbol_or_path)
 }
 
+/// Returns a skeleton view of a source file by eliding function and class bodies with `...`.
+///
+/// Falls back to the full raw source if the file's language is not supported by the parser.
 pub fn outline(dir: &Path, path: &str) -> Result<String> {
     let db_path = dir.join("codebones.db");
     let db_path_str = db_path
@@ -113,10 +122,11 @@ pub fn outline(dir: &Path, path: &str) -> Result<String> {
             let mut result = String::new();
             let mut last_end = 0;
 
-            let mut sorted_symbols = doc.symbols.clone();
-            sorted_symbols.sort_by_key(|s| s.full_range.start);
+            let mut indices: Vec<usize> = (0..doc.symbols.len()).collect();
+            indices.sort_by_key(|&i| doc.symbols[i].full_range.start);
 
-            for sym in sorted_symbols {
+            for i in &indices {
+                let sym = &doc.symbols[*i];
                 if let Some(body_range) = &sym.body_range {
                     if body_range.start >= last_end {
                         result.push_str(&source[last_end..body_range.start]);
@@ -135,6 +145,9 @@ pub fn outline(dir: &Path, path: &str) -> Result<String> {
     anyhow::bail!("Path not found: {}", path)
 }
 
+/// Searches the cache for symbol IDs whose name contains `query` (substring match).
+///
+/// Returns a list of fully-qualified symbol ID strings; an empty vec means no matches.
 pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
     let db_path = dir.join("codebones.db");
     let db_path_str = db_path
@@ -147,6 +160,9 @@ pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
     cache.search_symbol_ids(&like_query).map_err(Into::into)
 }
 
+/// Options that control how `pack` filters and transforms files before bundling them.
+///
+/// Set boolean flags to strip comments, empty lines, or long base64 blobs; use `include`/`ignore` glob lists to narrow the file set.
 pub struct PackOptions {
     pub no_file_summary: bool,
     pub no_files: bool,
@@ -157,6 +173,9 @@ pub struct PackOptions {
     pub ignore: Option<Vec<String>>,
 }
 
+/// Bundles all indexed files in `dir` into a single AI-friendly document in Markdown or XML format.
+///
+/// Automatically re-indexes `dir` before packing; pass `max_tokens` to enable token-budget degradation that drops file bodies when the limit is exceeded.
 pub fn pack(
     dir: &Path,
     format_str: &str,
@@ -165,7 +184,12 @@ pub fn pack(
 ) -> Result<String> {
     // If the provided dir is actually a file, use its parent directory for the database
     let base_dir = if dir.is_file() {
-        dir.parent().unwrap_or(Path::new("."))
+        let parent = dir.parent().unwrap_or(Path::new("."));
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
     } else {
         dir
     };
