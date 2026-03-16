@@ -402,6 +402,13 @@ fn search_handles_percent_special_character() -> Result<(), Box<dyn std::error::
         "search with '%' should not return an error; got: {:?}",
         results.err()
     );
+    // A bare '%' is an unescaped SQL LIKE wildcard that matches every symbol name.
+    // Assert the result is non-empty — the indexed file has symbols so at least one must match.
+    let results = results.expect("search with '%' must succeed");
+    assert!(
+        !results.is_empty(),
+        "search with '%' (SQL LIKE wildcard) should match all indexed symbols; got empty vec"
+    );
     Ok(())
 }
 
@@ -670,8 +677,12 @@ fn pack_max_tokens_causes_graceful_degradation() -> Result<(), Box<dyn std::erro
     // When budget is exceeded, file content blocks should be omitted.
     // The skeleton map may still be present.
     assert!(
-        !output.contains("<![CDATA[") || output.contains("<skeleton_map>"),
-        "when budget is exceeded, full content should be degraded; got: {output}"
+        !output.contains("<![CDATA["),
+        "With max_tokens=5, file content must be omitted from output; got: {output}"
+    );
+    assert!(
+        output.contains("<skeleton_map>"),
+        "Skeleton map must still be present even when token budget exhausted; got: {output}"
     );
     Ok(())
 }

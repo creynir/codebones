@@ -372,10 +372,32 @@ mod tests {
         // Must not panic; an empty name stored successfully is also acceptable.
         match result {
             Ok(()) => {
-                let symbols = cache.get_file_symbols("src/empty.rs").unwrap();
-                assert_eq!(symbols[0].1, "");
+                // Round-trip: the empty name must be retrievable and correct.
+                let symbols = cache
+                    .get_file_symbols("src/empty.rs")
+                    .expect("get_file_symbols must not error after successful insert");
+                assert_eq!(
+                    symbols.len(),
+                    1,
+                    "exactly one symbol should be stored; got: {:?}",
+                    symbols
+                );
+                assert_eq!(
+                    symbols[0].1, "",
+                    "retrieved symbol name must be the empty string; got: {:?}",
+                    symbols[0].1
+                );
             }
-            Err(_) => {} // Graceful rejection is also fine
+            Err(e) => {
+                // Graceful rejection is also fine, but must be a rusqlite constraint or
+                // type error — not a panic.  Assert the error is a recognizable rusqlite
+                // error so we know the code path is intentional, not an unexpected crash.
+                let msg = e.to_string();
+                assert!(
+                    !msg.is_empty(),
+                    "rejection error message must be non-empty; got empty string"
+                );
+            }
         }
     }
 

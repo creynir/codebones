@@ -38,6 +38,19 @@ pub struct Packer {
 }
 
 impl Packer {
+    fn xml_escape(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+            .replace('"', "&quot;")
+            .replace('\'', "&apos;")
+    }
+
+    fn xml_escape_cdata(s: &str) -> String {
+        // Split ]]> into ]]]]><![CDATA[> to keep it inside CDATA
+        s.replace("]]>", "]]]]><![CDATA[>")
+    }
+
     /// Creates a new Packer instance.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -112,7 +125,10 @@ impl Packer {
                 OutputFormat::Xml => {
                     output.push_str("  <skeleton_map>\n");
                     for path in file_paths {
-                        output.push_str(&format!("    <file path=\"{}\">\n", path.display()));
+                        output.push_str(&format!(
+                            "    <file path=\"{}\">\n",
+                            Self::xml_escape(&path.display().to_string())
+                        ));
                         let path_str = path.to_string_lossy().to_string();
                         let path_normalized = path_str.strip_prefix("./").unwrap_or(&path_str);
                         // Match the correct DB file path using ends_with since path_str may contain dir prefix
@@ -128,7 +144,8 @@ impl Packer {
                         for (kind, name) in symbols {
                             output.push_str(&format!(
                                 "      <signature>{} {}</signature>\n",
-                                kind, name
+                                Self::xml_escape(&kind),
+                                Self::xml_escape(&name)
                             ));
                         }
                         output.push_str("    </file>\n");
@@ -263,7 +280,10 @@ impl Packer {
 
             match self.format {
                 OutputFormat::Xml => {
-                    output.push_str(&format!("  <file path=\"{}\">\n", path.display()));
+                    output.push_str(&format!(
+                        "  <file path=\"{}\">\n",
+                        Self::xml_escape(&path.display().to_string())
+                    ));
                     if !degrade_to_bones {
                         let safe_content = content.replace("]]>", "]]]]><![CDATA[>");
                         output.push_str(&format!(
@@ -341,10 +361,10 @@ mod tests {
     }
 
     fn make_temp_rs_file(content: &str) -> (tempfile::TempDir, PathBuf) {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let file_path = dir.path().join("sample.rs");
-        let mut f = std::fs::File::create(&file_path).unwrap();
-        f.write_all(content.as_bytes()).unwrap();
+        let mut f = std::fs::File::create(&file_path).expect("failed to create temp file");
+        f.write_all(content.as_bytes()).expect("failed to write file content");
         (dir, file_path)
     }
 
@@ -353,15 +373,15 @@ mod tests {
         let plugin = MockPlugin;
         assert!(plugin.detect(Path::new(".")));
         let mut bones = vec![Bone::default()];
-        plugin.enrich(Path::new("any_file.rs"), &mut bones).unwrap();
-        assert_eq!(bones[0].metadata.get("injected").unwrap(), "true");
+        plugin.enrich(Path::new("any_file.rs"), &mut bones).expect("enrich should succeed");
+        assert_eq!(bones[0].metadata.get("injected").expect("injected key must be present"), "true");
     }
 
     #[test]
     fn test_packer_xml_format() {
         let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -373,7 +393,7 @@ mod tests {
         );
         let result = packer.pack(&[file_path]);
         assert!(result.is_ok());
-        let output = result.unwrap();
+        let output = result.expect("pack should succeed");
         assert!(output.contains("<repository>"));
     }
 
@@ -381,7 +401,7 @@ mod tests {
     fn test_packer_markdown_format() {
         let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Markdown,
             None,
@@ -393,7 +413,7 @@ mod tests {
         );
         let result = packer.pack(&[file_path.clone()]);
         assert!(result.is_ok());
-        let output = result.unwrap();
+        let output = result.expect("pack should succeed");
         assert!(output.contains(&format!("## {}", file_path.display())));
     }
 
@@ -401,7 +421,7 @@ mod tests {
     fn test_packer_with_plugins() {
         let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
         let mut packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -414,14 +434,14 @@ mod tests {
         packer.register_plugin(Box::new(MockPlugin));
         let result = packer.pack(&[file_path]);
         assert!(result.is_ok());
-        let output = result.unwrap();
+        let output = result.expect("pack should succeed");
         assert!(output.contains("injected"));
     }
 
     #[test]
     fn test_packer_empty_file_list() {
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -438,7 +458,7 @@ mod tests {
     #[test]
     fn test_packer_missing_file() {
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -457,7 +477,7 @@ mod tests {
     fn test_packer_generates_skeleton_map_at_top() {
         let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -469,7 +489,7 @@ mod tests {
         );
         let result = packer.pack(&[file_path]);
         assert!(result.is_ok());
-        let output = result.unwrap();
+        let output = result.expect("pack should succeed");
         // The skeleton map should be at the top of the output
         assert!(output.starts_with("<repository>\n  <skeleton_map>"));
     }
@@ -479,7 +499,7 @@ mod tests {
         // Set a very low max_tokens to force degradation to bones-only output
         let (_dir, file_path) = make_temp_rs_file("fn main() { let x = 1; }\n");
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             Some(10),
@@ -491,7 +511,7 @@ mod tests {
         );
         let result = packer.pack(&[file_path]);
         assert!(result.is_ok());
-        let output = result.unwrap();
+        let output = result.expect("pack should succeed");
         // When degraded to bones, full file content should not appear in output
         assert!(!output.contains("<content>"));
     }
@@ -501,8 +521,8 @@ mod tests {
     // -------------------------------------------------------------------------
     fn make_temp_file(dir: &tempfile::TempDir, filename: &str, content: &str) -> PathBuf {
         let file_path = dir.path().join(filename);
-        let mut f = std::fs::File::create(&file_path).unwrap();
-        f.write_all(content.as_bytes()).unwrap();
+        let mut f = std::fs::File::create(&file_path).expect("failed to create temp file");
+        f.write_all(content.as_bytes()).expect("failed to write file content");
         file_path
     }
 
@@ -518,11 +538,11 @@ mod tests {
     fn test_xml_signature_special_chars_are_escaped() {
         use crate::cache::CacheStore;
 
-        let cache = SqliteCache::new_in_memory().unwrap();
-        cache.init().unwrap();
+        let cache = SqliteCache::new_in_memory().expect("failed to create test cache");
+        cache.init().expect("failed to init cache schema");
 
         // Insert a file + symbol with XML-dangerous characters in the name.
-        let file_id = cache.upsert_file("bad.rs", "h1", b"fn bad() {}").unwrap();
+        let file_id = cache.upsert_file("bad.rs", "h1", b"fn bad() {}").expect("upsert_file should succeed");
         cache
             .conn
             .execute(
@@ -530,9 +550,9 @@ mod tests {
                  VALUES ('s1', ?1, '<script>&\"test\"</script>', 'function', 0, 11)",
                 rusqlite::params![file_id],
             )
-            .unwrap();
+            .expect("symbol insert should succeed");
 
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let file_path = make_temp_file(&dir, "bad.rs", "fn bad() {}\n");
 
         let packer = Packer::new(
@@ -546,7 +566,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         // The raw unescaped characters must NOT appear outside of CDATA in XML attributes/tags.
         // Correct output would use &lt; &gt; &amp; &quot; instead.
@@ -564,12 +584,12 @@ mod tests {
     /// This test describes CORRECT behavior and is expected to FAIL until fixed.
     #[test]
     fn test_xml_path_attribute_special_chars_are_escaped() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         // Use a filename that contains an ampersand (legal on most filesystems).
         let file_path = make_temp_file(&dir, "a&b.txt", "hello world\n");
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -579,7 +599,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         // The bare & must be escaped as &amp; in XML attributes.
         assert!(
@@ -592,13 +612,13 @@ mod tests {
     /// the XML document stays well-formed.
     #[test]
     fn test_xml_cdata_cdata_end_sequence_is_escaped() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         // Content that would prematurely close a CDATA section.
         let tricky = "let s = \"]]>\";\n";
         let file_path = make_temp_file(&dir, "tricky.txt", tricky);
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -608,7 +628,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         // The raw ]]> sequence must not appear verbatim inside a CDATA section.
         // The implementation splits it as ]]]]><![CDATA[>.
@@ -634,7 +654,7 @@ mod tests {
         let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -644,7 +664,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         assert!(
             output.starts_with("<repository>"),
@@ -656,7 +676,7 @@ mod tests {
         );
 
         // Strip all CDATA sections before checking for bare angle brackets.
-        let cdata_re = regex::Regex::new(r"(?s)<!\[CDATA\[.*?]]>").unwrap();
+        let cdata_re = regex::Regex::new(r"(?s)<!\[CDATA\[.*?]]>").expect("failed to compile cdata regex");
         let stripped = cdata_re.replace_all(&output, "");
 
         // Any remaining < must be the start of a tag (followed by [/a-zA-Z!?])
@@ -683,10 +703,10 @@ mod tests {
     fn test_markdown_skeleton_map_indentation() {
         use crate::cache::CacheStore;
 
-        let cache = SqliteCache::new_in_memory().unwrap();
-        cache.init().unwrap();
+        let cache = SqliteCache::new_in_memory().expect("failed to create test cache");
+        cache.init().expect("failed to init cache schema");
 
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let file_path = make_temp_file(&dir, "lib.rs", "fn alpha() {}\n");
 
         let file_id = cache
@@ -695,7 +715,7 @@ mod tests {
                 "h2",
                 b"fn alpha() {}",
             )
-            .unwrap();
+            .expect("upsert_file should succeed");
         cache
             .conn
             .execute(
@@ -703,7 +723,7 @@ mod tests {
                  VALUES ('s_alpha', ?1, 'alpha', 'function', 0, 13)",
                 rusqlite::params![file_id],
             )
-            .unwrap();
+            .expect("symbol insert should succeed");
 
         let packer = Packer::new(
             cache,
@@ -716,7 +736,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         // The file should appear as a bullet: "- <path>"
         assert!(output.contains("- "), "File bullet not found in Markdown output");
@@ -735,10 +755,10 @@ mod tests {
     fn test_markdown_symbol_names_with_special_chars() {
         use crate::cache::CacheStore;
 
-        let cache = SqliteCache::new_in_memory().unwrap();
-        cache.init().unwrap();
+        let cache = SqliteCache::new_in_memory().expect("failed to create test cache");
+        cache.init().expect("failed to init cache schema");
 
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let file_path = make_temp_file(&dir, "weird.rs", "fn weird() {}\n");
 
         let file_id = cache
@@ -747,7 +767,7 @@ mod tests {
                 "h3",
                 b"fn weird() {}",
             )
-            .unwrap();
+            .expect("upsert_file should succeed");
         // Symbol name with markdown special characters
         cache
             .conn
@@ -756,7 +776,7 @@ mod tests {
                  VALUES ('s_weird', ?1, '*_[weird`_]*', 'function', 0, 13)",
                 rusqlite::params![file_id],
             )
-            .unwrap();
+            .expect("symbol insert should succeed");
 
         let packer = Packer::new(
             cache,
@@ -769,7 +789,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         // The file bullet must still be present — structure is intact.
         assert!(output.contains("- "), "File bullet disappeared");
@@ -791,7 +811,7 @@ mod tests {
         let (_dir, file_path) = make_temp_rs_file("fn main() { let x = 42; }\n");
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             Some(100_000), // very large budget
@@ -801,7 +821,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         // Content block should be present.
         assert!(
@@ -817,7 +837,7 @@ mod tests {
         let (_dir, file_path) = make_temp_rs_file("fn main() { let x = 42; }\n");
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             Some(1), // impossibly tight budget
@@ -831,7 +851,7 @@ mod tests {
 
         // Must not panic or error.
         assert!(result.is_ok(), "pack() must not error under tight budget");
-        let output = result.unwrap();
+        let output = result.expect("pack should succeed");
 
         // No file content should be present.
         assert!(
@@ -849,7 +869,7 @@ mod tests {
 
         for budget in [0usize, 1, 5, 50] {
             let packer = Packer::new(
-                SqliteCache::new_in_memory().unwrap(),
+                SqliteCache::new_in_memory().expect("failed to create test cache"),
                 Parser {},
                 OutputFormat::Xml,
                 Some(budget),
@@ -879,7 +899,7 @@ mod tests {
         let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -889,7 +909,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         // Only the repository wrapper should be present.
         let trimmed = output.trim();
@@ -903,7 +923,7 @@ mod tests {
     /// remove_comments=true should strip `//` line comments from Rust source.
     #[test]
     fn test_remove_line_comments_from_rust() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         // Use .txt so the parser falls back to raw content (no body elision complicates things).
         let file_path = make_temp_file(
             &dir,
@@ -912,7 +932,7 @@ mod tests {
         );
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -922,7 +942,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         assert!(
             !output.contains("// this is a comment"),
@@ -938,7 +958,7 @@ mod tests {
     /// remove_comments=true should strip `/* */` block comments.
     #[test]
     fn test_remove_block_comments() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let file_path = make_temp_file(
             &dir,
             "block_comments.txt",
@@ -946,7 +966,7 @@ mod tests {
         );
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -956,7 +976,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         assert!(
             !output.contains("inline block"),
@@ -976,7 +996,7 @@ mod tests {
     /// into a single newline.
     #[test]
     fn test_remove_empty_lines_collapses_blanks() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let file_path = make_temp_file(
             &dir,
             "blanks.txt",
@@ -984,7 +1004,7 @@ mod tests {
         );
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -994,7 +1014,7 @@ mod tests {
             true, // remove_empty_lines
             false,
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         // There must be no run of more than one blank line in the content.
         assert!(
@@ -1016,14 +1036,14 @@ mod tests {
     /// with the placeholder `[TRUNCATED_BASE64]`.
     #[test]
     fn test_truncate_base64_replaces_long_strings() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         // Exactly 100 alphanumeric chars — the boundary that SHOULD be truncated.
         let long_token = "A".repeat(100);
         let content = format!("key = {}\n", long_token);
         let file_path = make_temp_file(&dir, "tokens.txt", &content);
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -1033,7 +1053,7 @@ mod tests {
             false,
             true, // truncate_base64
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         assert!(
             output.contains("[TRUNCATED_BASE64]"),
@@ -1048,14 +1068,14 @@ mod tests {
     /// truncate_base64=true must NOT truncate strings of 99 characters or fewer.
     #[test]
     fn test_truncate_base64_preserves_short_strings() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         // 99 alphanumeric chars — one below the truncation threshold.
         let short_token = "B".repeat(99);
         let content = format!("key = {}\n", short_token);
         let file_path = make_temp_file(&dir, "short_tokens.txt", &content);
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -1065,7 +1085,7 @@ mod tests {
             false,
             true, // truncate_base64
         );
-        let output = packer.pack(&[file_path]).unwrap();
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         assert!(
             output.contains(&short_token),
@@ -1084,13 +1104,13 @@ mod tests {
     /// Packer with 3 files: all three must appear in the skeleton map.
     #[test]
     fn test_three_files_all_appear_in_skeleton_map() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let f1 = make_temp_file(&dir, "one.txt", "content one\n");
         let f2 = make_temp_file(&dir, "two.txt", "content two\n");
         let f3 = make_temp_file(&dir, "three.txt", "content three\n");
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -1100,7 +1120,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[f1, f2, f3]).unwrap();
+        let output = packer.pack(&[f1, f2, f3]).expect("pack should succeed");
 
         assert!(output.contains("one.txt"), "one.txt missing from output");
         assert!(output.contains("two.txt"), "two.txt missing from output");
@@ -1111,13 +1131,13 @@ mod tests {
     /// to pack() — i.e., the ordering is deterministic.
     #[test]
     fn test_skeleton_map_preserves_input_order() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let f1 = make_temp_file(&dir, "alpha.txt", "alpha\n");
         let f2 = make_temp_file(&dir, "beta.txt", "beta\n");
         let f3 = make_temp_file(&dir, "gamma.txt", "gamma\n");
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -1127,7 +1147,7 @@ mod tests {
             false,
             false,
         );
-        let output = packer.pack(&[f1, f2, f3]).unwrap();
+        let output = packer.pack(&[f1, f2, f3]).expect("pack should succeed");
 
         let pos_alpha = output.find("alpha.txt").expect("alpha.txt not found");
         let pos_beta = output.find("beta.txt").expect("beta.txt not found");
@@ -1148,14 +1168,14 @@ mod tests {
     /// just a warning on stderr.
     #[test]
     fn test_deleted_file_is_gracefully_skipped() {
-        let dir = tempfile::TempDir::new().unwrap();
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let file_path = make_temp_file(&dir, "ephemeral.txt", "will be deleted\n");
 
         // Delete the file before calling pack().
-        std::fs::remove_file(&file_path).unwrap();
+        std::fs::remove_file(&file_path).expect("failed to delete ephemeral file");
 
         let packer = Packer::new(
-            SqliteCache::new_in_memory().unwrap(),
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
             Parser {},
             OutputFormat::Xml,
             None,
@@ -1173,7 +1193,7 @@ mod tests {
             result.err()
         );
 
-        let output = result.unwrap();
+        let output = result.expect("pack should succeed even when file is deleted");
         // The output should still be a well-formed XML document.
         assert!(output.contains("<repository>"), "Output must start with <repository>");
         assert!(

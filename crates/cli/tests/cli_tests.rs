@@ -186,7 +186,7 @@ fn test_pack_flags_no_files() {
 }
 
 #[test]
-fn test_pack_flags_remove_comments_and_empty_lines() {
+fn test_pack_flags_remove_comments() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
@@ -198,7 +198,6 @@ fn test_pack_flags_remove_comments_and_empty_lines() {
             "--format",
             "xml",
             "--remove-comments",
-            "--remove-empty-lines",
         ])
         .assert()
         .success()
@@ -206,9 +205,30 @@ fn test_pack_flags_remove_comments_and_empty_lines() {
             predicate::str::contains("A single line comment")
                 .not()
                 .and(predicate::str::contains("A block comment").not())
-                .and(predicate::str::contains("\n\n\n").not()) // Multiple newlines should be gone
                 // The exact comment string from the fixture must not appear after stripping
                 .and(predicate::str::contains("// A single line comment").not()),
+        );
+}
+
+#[test]
+fn test_pack_flags_remove_empty_lines() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    let mut cmd = Command::cargo_bin("codebones").unwrap();
+    cmd.current_dir(root)
+        .args([
+            "pack",
+            "dummy.rs",
+            "--format",
+            "xml",
+            "--remove-empty-lines",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            // Multiple consecutive newlines should be collapsed
+            predicate::str::contains("\n\n\n").not(),
         );
 }
 

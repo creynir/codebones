@@ -194,12 +194,6 @@ mod tests {
     }
 
     #[test]
-    fn test_rejects_path_traversal() {
-        // This is tricky to simulate with just the walker, but we can test the logic directly if we inject a path.
-        // For the sake of the test, we'll create a symlink that escapes and check symlink escape error.
-    }
-
-    #[test]
     fn test_skips_symlinks_escaping_root() {
         let dir = setup_workspace();
         let root = dir.path();
