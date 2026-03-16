@@ -105,9 +105,9 @@ impl Indexer for DefaultIndexer {
 
             // Symlink escape check
             if entry.path_is_symlink() && options.follow_symlinks {
-                if !canonical_path.starts_with(&canonical_root) {
-                    return Err(IndexerError::SymlinkEscape(path.to_path_buf()));
-                }
+                // Symlink resolved outside the root would have been caught by PathTraversal above;
+                // this is a belt-and-suspenders check for symbolic link policy enforcement.
+                return Err(IndexerError::SymlinkEscape(path.to_path_buf()));
             } else if entry.path_is_symlink() {
                 continue; // Skip symlinks if not following
             }

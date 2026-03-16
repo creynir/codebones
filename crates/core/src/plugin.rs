@@ -158,7 +158,8 @@ impl Packer {
             return Ok(output);
         }
 
-        let bpe = tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must be available");
+        let bpe = tiktoken_rs::cl100k_base()
+            .map_err(|e| anyhow::anyhow!("Failed to initialize tokenizer: {}", e))?;
         let mut degrade_to_bones = false;
 
         for path in file_paths {
