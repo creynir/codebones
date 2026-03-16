@@ -116,10 +116,19 @@ impl Indexer for DefaultIndexer {
             let file_name = path.file_name().unwrap_or_default().to_string_lossy();
             if file_name == ".env"
                 || file_name.starts_with(".env.")
+                || file_name == ".envrc"
                 || file_name.ends_with(".pem")
                 || file_name.ends_with(".key")
+                || file_name.ends_with(".tfvars")
+                || file_name.ends_with(".p12")
+                || file_name.ends_with(".pfx")
+                || file_name.ends_with(".jks")
                 || file_name.starts_with("id_rsa")
                 || file_name.starts_with("id_ed25519")
+                || file_name == "id_ecdsa"
+                || file_name == "id_dsa"
+                || file_name == "id_ecdsa_sk"
+                || file_name == "id_xmss"
                 || file_name == "credentials.json"
                 || file_name.ends_with(".secrets")
                 || file_name.ends_with(".token")
@@ -149,11 +158,19 @@ impl Indexer for DefaultIndexer {
                 continue;
             }
 
-            // Binary detection (null bytes)
+            // Binary detection (null bytes) and PEM credential detection
             let mut file = File::open(path)?;
             let mut buffer = [0; 8192];
             let bytes_read = file.read(&mut buffer)?;
-            if buffer[..bytes_read].contains(&0) {
+            let chunk = &buffer[..bytes_read];
+            if chunk.contains(&0) {
+                continue;
+            }
+            // Skip PEM-encoded credential files (private keys, certificates, etc.)
+            if chunk
+                .windows(11)
+                .any(|w| w == b"-----BEGIN ")
+            {
                 continue;
             }
 
@@ -174,7 +191,7 @@ impl Indexer for DefaultIndexer {
             });
 
             count += 1;
-            if count > options.max_file_count {
+            if count >= options.max_file_count {
                 return Err(IndexerError::FileCountLimitExceeded);
             }
         }
@@ -385,6 +402,38 @@ mod tests {
         assert!(
             !names.iter().any(|n| n == "credentials.json"),
             "credentials.json must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_pem_header_file() {
+        // Any file whose content begins with a PEM header must be treated as a
+        // credential and excluded, regardless of its filename or extension.
+        let dir = setup_workspace();
+        let root = dir.path();
+        // Use an unusual extension to confirm the check is content-based, not name-based.
+        fs::write(
+            root.join("server.crt"),
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----\n",
+        )
+        .unwrap();
+        fs::write(root.join("normal.txt"), "just text").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "server.crt"),
+            "File with PEM header must be excluded, got: {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n == "normal.txt"),
+            "normal.txt must still be indexed, got: {:?}",
             names
         );
     }
