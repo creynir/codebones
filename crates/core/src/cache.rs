@@ -41,10 +41,22 @@ pub trait CacheStore {
 
     /// Get symbols for a file
     fn get_file_symbols(&self, path: &str) -> rusqlite::Result<Vec<(String, String)>>;
+
+    /// Get the raw content bytes of a file by path
+    fn get_file_content(&self, path: &str) -> rusqlite::Result<Option<Vec<u8>>>;
+
+    /// List all file paths stored in the database
+    fn list_file_paths(&self) -> rusqlite::Result<Vec<String>>;
+
+    /// List all files with their associated symbols (kind, name), ordered by byte_offset
+    fn list_files_with_symbols(&self) -> rusqlite::Result<Vec<(String, Vec<(String, String)>)>>;
+
+    /// Search symbol IDs whose name matches a SQL LIKE pattern
+    fn search_symbol_ids(&self, like_pattern: &str) -> rusqlite::Result<Vec<String>>;
 }
 
 pub struct SqliteCache {
-    pub conn: Connection,
+    pub(crate) conn: Connection,
 }
 
 impl SqliteCache {
@@ -59,6 +71,20 @@ impl SqliteCache {
         let conn = Connection::open_in_memory()?;
         conn.execute("PRAGMA foreign_keys = ON", [])?;
         Ok(Self { conn })
+    }
+
+    fn get_file_symbols_by_id(&self, file_id: i64) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT kind, name FROM symbols WHERE file_id = ?1 ORDER BY byte_offset ASC",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![file_id])?;
+        let mut symbols = Vec::new();
+        while let Some(row) = rows.next()? {
+            let kind: String = row.get(0)?;
+            let name: String = row.get(1)?;
+            symbols.push((kind, name));
+        }
+        Ok(symbols)
     }
 }
 
@@ -166,6 +192,53 @@ impl CacheStore for SqliteCache {
             symbols.push((kind, name));
         }
         Ok(symbols)
+    }
+
+    fn get_file_content(&self, path: &str) -> rusqlite::Result<Option<Vec<u8>>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT content FROM files WHERE path = ?1")?;
+        let mut rows = stmt.query(rusqlite::params![path])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(row.get(0)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn list_file_paths(&self) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT path FROM files")?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        let mut paths = Vec::new();
+        for row in rows {
+            paths.push(row?);
+        }
+        Ok(paths)
+    }
+
+    fn list_files_with_symbols(&self) -> rusqlite::Result<Vec<(String, Vec<(String, String)>)>> {
+        let mut file_stmt = self.conn.prepare("SELECT id, path FROM files")?;
+        let mut file_rows = file_stmt.query([])?;
+        let mut result = Vec::new();
+        while let Some(row) = file_rows.next()? {
+            let id: i64 = row.get(0)?;
+            let path: String = row.get(1)?;
+            let symbols = self.get_file_symbols_by_id(id)?;
+            result.push((path, symbols));
+        }
+        Ok(result)
+    }
+
+    fn search_symbol_ids(&self, like_pattern: &str) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM symbols WHERE name LIKE ?1")?;
+        let rows = stmt.query_map(rusqlite::params![like_pattern], |row| row.get(0))?;
+        let mut ids = Vec::new();
+        for row in rows {
+            ids.push(row?);
+        }
+        Ok(ids)
     }
 }
 

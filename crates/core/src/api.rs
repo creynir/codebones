@@ -8,7 +8,10 @@ use std::path::Path;
 
 pub fn index(dir: &Path) -> Result<()> {
     let db_path = dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
     let indexer = DefaultIndexer;
@@ -20,9 +23,14 @@ pub fn index(dir: &Path) -> Result<()> {
 
         if existing_hash.as_deref() != Some(fh.hash.as_str()) {
             let full_path = dir.join(&fh.path);
-            let content = fs::read(&full_path).unwrap_or_default();
+            let content = fs::read(&full_path).unwrap_or_else(|e| {
+                eprintln!("Warning: could not read {}: {}", full_path.display(), e);
+                vec![]
+            });
 
-            // Delete old file to trigger cascade delete of symbols
+            // Delete old file to trigger cascade delete of symbols.
+            // Ignoring the error here is intentional: if the file does not yet exist in
+            // the cache this is a no-op, which is the desired idempotent behaviour.
             let _ = cache.delete_file(&path_str);
 
             let file_id = cache.upsert_file(&path_str, &fh.hash, &content)?;
@@ -50,7 +58,7 @@ pub fn index(dir: &Path) -> Result<()> {
                             byte_offset: sym.full_range.start,
                             byte_length: sym.full_range.end - sym.full_range.start,
                         };
-                        let _ = cache.insert_symbol(&cache_sym);
+                        cache.insert_symbol(&cache_sym)?;
                     }
                 }
             }
@@ -62,7 +70,10 @@ pub fn index(dir: &Path) -> Result<()> {
 
 pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
     let db_path = dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
     // It's a symbol if it contains ::
@@ -72,12 +83,7 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
         }
     } else {
         // Assume file path
-        let mut stmt = cache
-            .conn
-            .prepare("SELECT content FROM files WHERE path = ?1")?;
-        let mut rows = stmt.query([symbol_or_path])?;
-        if let Some(row) = rows.next()? {
-            let content: Vec<u8> = row.get(0)?;
+        if let Some(content) = cache.get_file_content(symbol_or_path)? {
             return Ok(String::from_utf8_lossy(&content).to_string());
         }
     }
@@ -87,15 +93,13 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
 
 pub fn outline(dir: &Path, path: &str) -> Result<String> {
     let db_path = dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
-    let mut stmt = cache
-        .conn
-        .prepare("SELECT content FROM files WHERE path = ?1")?;
-    let mut rows = stmt.query([path])?;
-    if let Some(row) = rows.next()? {
-        let content: Vec<u8> = row.get(0)?;
+    if let Some(content) = cache.get_file_content(path)? {
         let source = String::from_utf8_lossy(&content).to_string();
 
         let ext = Path::new(path)
@@ -133,22 +137,14 @@ pub fn outline(dir: &Path, path: &str) -> Result<String> {
 
 pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
     let db_path = dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
-    // Naive search over symbols name using LIKE
-    let mut stmt = cache
-        .conn
-        .prepare("SELECT id FROM symbols WHERE name LIKE ?1")?;
     let like_query = format!("%{}%", query);
-    let rows = stmt.query_map([like_query], |row| row.get::<_, String>(0))?;
-
-    let mut results = Vec::new();
-    for row in rows {
-        results.push(row?);
-    }
-
-    Ok(results)
+    cache.search_symbol_ids(&like_query).map_err(Into::into)
 }
 
 pub struct PackOptions {
@@ -178,7 +174,10 @@ pub fn pack(
     index(base_dir)?;
 
     let db_path = base_dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
     let format = match format_str.to_lowercase().as_str() {
@@ -189,8 +188,7 @@ pub fn pack(
     // Get all files
     let mut paths = Vec::new();
     {
-        let mut stmt = cache.conn.prepare("SELECT path FROM files")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let file_paths = cache.list_file_paths()?;
 
         let mut include_builder = globset::GlobSetBuilder::new();
         let mut has_includes = false;
@@ -216,8 +214,7 @@ pub fn pack(
         }
         let ignore_set = ignore_builder.build().unwrap_or(globset::GlobSet::empty());
 
-        for row in rows {
-            let path_str = row?;
+        for path_str in file_paths {
 
             if has_includes && !include_set.is_match(&path_str) {
                 continue;
@@ -227,6 +224,16 @@ pub fn pack(
             }
 
             let file_path = base_dir.join(&path_str);
+
+            // Security: verify the DB-stored path doesn't escape the base directory
+            if let Ok(canonical) = file_path.canonicalize() {
+                if let Ok(base_canonical) = base_dir.canonicalize() {
+                    if !canonical.starts_with(&base_canonical) {
+                        eprintln!("Warning: skipping path that escapes base dir: {}", path_str);
+                        continue;
+                    }
+                }
+            }
 
             // If the user specified a file rather than a directory, only include that specific file
             if dir.is_file() {

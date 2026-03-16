@@ -1,8 +1,18 @@
-use crate::cache::SqliteCache;
+use crate::cache::{CacheStore, SqliteCache};
 use crate::parser::Bone;
 use crate::parser::Parser;
 use anyhow::Result;
+use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
+
+static RE_EMPTY_LINES: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"\n\s*\n").unwrap());
+static RE_BASE64: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").unwrap());
+static RE_LINE_COMMENT: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"(?m)(//|#).*\n").unwrap());
+static RE_BLOCK_COMMENT: Lazy<regex::Regex> =
+    Lazy::new(|| regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap());
 
 /// A plugin that can enrich extracted code bones with domain-specific metadata.
 pub trait ContextPlugin: Send + Sync {
@@ -90,34 +100,26 @@ impl Packer {
         let mut output = String::new();
 
         // Retrieve all files and their symbols from DB to build the skeleton map
-        let mut db_files_symbols: Vec<(String, Vec<(String, String)>)> = Vec::new();
-        if let Ok(mut stmt) = self.cache.conn.prepare("SELECT id, path FROM files") {
-            if let Ok(mut rows) = stmt.query([]) {
-                while let Ok(Some(row)) = rows.next() {
-                    let id: i64 = row.get(0).unwrap_or(0);
-                    let db_path: String = row.get(1).unwrap_or_default();
-
-                    let mut symbols = Vec::new();
-                    if let Ok(mut sym_stmt) = self.cache.conn.prepare(
-                        "SELECT kind, name FROM symbols WHERE file_id = ? ORDER BY byte_offset ASC",
-                    ) {
-                        if let Ok(mut sym_rows) = sym_stmt.query([id]) {
-                            while let Ok(Some(sym_row)) = sym_rows.next() {
-                                let kind: String = sym_row.get(0).unwrap_or_default();
-                                let name: String = sym_row.get(1).unwrap_or_default();
-                                symbols.push((kind, name));
-                            }
-                        }
-                    }
-                    db_files_symbols.push((db_path, symbols));
-                }
-            }
-        }
+        let db_files_symbols: Vec<(String, Vec<(String, String)>)> =
+            self.cache.list_files_with_symbols().unwrap_or_default();
 
         match self.format {
             OutputFormat::Xml => output.push_str("<repository>\n"),
             OutputFormat::Markdown => {}
         }
+
+        // Match the correct DB file path using ends_with since path_str may contain dir prefix
+        let lookup_symbols = |path: &PathBuf| -> Vec<(String, String)> {
+            let path_str = path.to_string_lossy().to_string();
+            let path_normalized = path_str.strip_prefix("./").unwrap_or(&path_str);
+            db_files_symbols
+                .iter()
+                .find(|(db_p, _)| {
+                    path_normalized.ends_with(db_p.as_str()) || db_p.ends_with(path_normalized)
+                })
+                .map(|(_, syms)| syms.clone())
+                .unwrap_or_default()
+        };
 
         // Generate Skeleton Map
         if !self.no_file_summary {
@@ -129,19 +131,7 @@ impl Packer {
                             "    <file path=\"{}\">\n",
                             Self::xml_escape(&path.display().to_string())
                         ));
-                        let path_str = path.to_string_lossy().to_string();
-                        let path_normalized = path_str.strip_prefix("./").unwrap_or(&path_str);
-                        // Match the correct DB file path using ends_with since path_str may contain dir prefix
-                        let symbols = db_files_symbols
-                            .iter()
-                            .find(|(db_p, _)| {
-                                path_normalized.ends_with(db_p.as_str())
-                                    || db_p.ends_with(path_normalized)
-                            })
-                            .map(|(_, syms)| syms.clone())
-                            .unwrap_or_default();
-
-                        for (kind, name) in symbols {
+                        for (kind, name) in lookup_symbols(path) {
                             output.push_str(&format!(
                                 "      <signature>{} {}</signature>\n",
                                 Self::xml_escape(&kind),
@@ -156,18 +146,7 @@ impl Packer {
                     output.push_str("## Skeleton Map\n\n");
                     for path in file_paths {
                         output.push_str(&format!("- {}\n", path.display()));
-                        let path_str = path.to_string_lossy().to_string();
-                        let path_normalized = path_str.strip_prefix("./").unwrap_or(&path_str);
-                        let symbols = db_files_symbols
-                            .iter()
-                            .find(|(db_p, _)| {
-                                path_normalized.ends_with(db_p.as_str())
-                                    || db_p.ends_with(path_normalized)
-                            })
-                            .map(|(_, syms)| syms.clone())
-                            .unwrap_or_default();
-
-                        for (kind, name) in symbols {
+                        for (kind, name) in lookup_symbols(path) {
                             output.push_str(&format!("  - {} {}\n", kind, name));
                         }
                     }
@@ -183,13 +162,8 @@ impl Packer {
             return Ok(output);
         }
 
-        let bpe = tiktoken_rs::cl100k_base().unwrap();
+        let bpe = tiktoken_rs::cl100k_base().expect("cl100k_base tokenizer must be available");
         let mut degrade_to_bones = false;
-
-        let re_empty_lines = regex::Regex::new(r"\n\s*\n").unwrap();
-        let re_base64 = regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").unwrap();
-        let re_line_comment = regex::Regex::new(r"(?m)(//|#).*\n").unwrap();
-        let re_block_comment = regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap();
 
         for path in file_paths {
             let mut raw_content = match std::fs::read_to_string(path) {
@@ -201,12 +175,12 @@ impl Packer {
             };
 
             if self.remove_empty_lines {
-                raw_content = re_empty_lines.replace_all(&raw_content, "\n").to_string();
+                raw_content = RE_EMPTY_LINES.replace_all(&raw_content, "\n").to_string();
             }
 
             if self.truncate_base64 {
                 // Truncate long hex or base64 looking strings (length > 100)
-                raw_content = re_base64
+                raw_content = RE_BASE64
                     .replace_all(&raw_content, "[TRUNCATED_BASE64]")
                     .to_string();
             }
@@ -222,16 +196,6 @@ impl Packer {
                     let mut sorted_symbols = doc.symbols.clone();
                     sorted_symbols.sort_by_key(|s| s.full_range.start);
 
-                    // Always remove comment nodes if remove_comments is true
-                    if self.remove_comments {
-                        // Using our parser to extract comment ranges would require returning them in doc
-                        // For simplicity, we can do a regex pass for common comments if we can't extract them from tree-sitter easily
-                        // A better approach is to add comments to the Document struct in the parser
-                        // We will implement regex fallback for now to avoid altering the parser trait right now
-                        let _is_in_block_comment = false;
-                        let _block_start = 0;
-                    }
-
                     for sym in sorted_symbols {
                         if let Some(body_range) = &sym.body_range {
                             if body_range.start >= last_end {
@@ -245,15 +209,15 @@ impl Packer {
 
                     if self.remove_comments {
                         // Simple regex fallback for comments (C-style, Python, HTML)
-                        result = re_block_comment.replace_all(&result, "").to_string();
-                        result = re_line_comment.replace_all(&result, "\n").to_string();
+                        result = RE_BLOCK_COMMENT.replace_all(&result, "").to_string();
+                        result = RE_LINE_COMMENT.replace_all(&result, "\n").to_string();
                     }
 
                     result
                 } else {
                     if self.remove_comments {
-                        let no_blocks = re_block_comment.replace_all(&raw_content, "").to_string();
-                        re_line_comment.replace_all(&no_blocks, "\n").to_string()
+                        let no_blocks = RE_BLOCK_COMMENT.replace_all(&raw_content, "").to_string();
+                        RE_LINE_COMMENT.replace_all(&no_blocks, "\n").to_string()
                     } else {
                         raw_content.clone() // Fallback to raw content if language isn't supported
                     }
@@ -779,12 +743,14 @@ mod tests {
             .expect("upsert_file should succeed");
         // Symbol name with markdown special characters
         cache
-            .conn
-            .execute(
-                "INSERT INTO symbols (id, file_id, name, kind, byte_offset, byte_length) \
-                 VALUES ('s_weird', ?1, '*_[weird`_]*', 'function', 0, 13)",
-                rusqlite::params![file_id],
-            )
+            .insert_symbol(&crate::cache::Symbol {
+                id: "s_weird".to_string(),
+                file_id,
+                name: "*_[weird`_]*".to_string(),
+                kind: "function".to_string(),
+                byte_offset: 0,
+                byte_length: 13,
+            })
             .expect("symbol insert should succeed");
 
         let packer = Packer::new(
