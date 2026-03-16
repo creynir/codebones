@@ -70,16 +70,16 @@ codebones-mcp
 
 - Benchmark index: [docs/benchmarks/README.md](docs/benchmarks/README.md)
 - Methodology: [docs/benchmarks/methodology.md](docs/benchmarks/methodology.md)
-- Latest results: [docs/benchmarks/results-2026-03-15.md](docs/benchmarks/results-2026-03-15.md)
+- Latest results: [docs/benchmarks/results.md](docs/benchmarks/results.md)
 
-Headline medians from the latest run:
+Headline medians from the latest run (v0.3.0):
 - Dataset columns by size:
 
 | Metric | 6,250 LOC | 832,991 LOC | 2,068,515 LOC |
 |---|---:|---:|---:|
-| `lookup_query` (cold, median) | `4.43 ms` | `6.90 ms` | `7.78 ms` |
-| `repo_index_build` (cold, median) | `9.90 ms` | `197.90 ms` | `978.31 ms` |
-| `context_pack` (cold, median) | `81.30 ms` | `3460.85 ms` | `7760.00 ms` |
+| `lookup_query` (cold, median) | `4.02 ms` | `10.45 ms` | `11.82 ms` |
+| `repo_index_build` (cold, median) | `8.45 ms` | `290.00 ms` | `1310.00 ms` |
+| `context_pack` (cold, median) | `50.00 ms` | `2580.00 ms` | `7930.00 ms` |
 
 Benchmark machine: macOS 15.7.1, Apple M4, 16 GB RAM (full environment and pinned revisions in benchmark methodology).
 
