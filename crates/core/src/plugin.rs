@@ -317,8 +317,34 @@ impl Packer {
                             }
                             max
                         };
-                        let fence = "`".repeat(max_backticks.max(2) + 1);
-                        output.push_str(&format!("{}\n{}\n{}\n\n", fence, content, fence));
+                        let fence_len = max_backticks.max(2) + 1;
+                        let fence = "`".repeat(fence_len);
+                        // Break up any backtick run of length >= (fence_len - 1) within the
+                        // content to prevent a closing-fence sequence from appearing verbatim.
+                        // A zero-width space (U+200B) is inserted after the (fence_len-1)-th
+                        // consecutive backtick so the run is interrupted while the characters
+                        // remain visible to the reader.
+                        let safe_content = if max_backticks >= fence_len - 1 {
+                            let threshold = fence_len - 1;
+                            let mut result = String::with_capacity(content.len());
+                            let mut run = 0usize;
+                            for c in content.chars() {
+                                result.push(c);
+                                if c == '`' {
+                                    run += 1;
+                                    if run == threshold {
+                                        result.push('\u{200B}'); // zero-width space
+                                        run = 0;
+                                    }
+                                } else {
+                                    run = 0;
+                                }
+                            }
+                            result
+                        } else {
+                            content.clone()
+                        };
+                        output.push_str(&format!("{}\n{}\n{}\n\n", fence, safe_content, fence));
                     }
                     // Only print Bones section if plugins added metadata
                     let has_metadata = bones.iter().any(|b| !b.metadata.is_empty());

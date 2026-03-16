@@ -468,6 +468,57 @@ fn search_handles_backslash_in_query() -> Result<(), Box<dyn std::error::Error>>
         "search with backslash should not panic or error; got: {:?}",
         result.err()
     );
+    // No symbol names contain a literal backslash, so the result must be empty.
+    let results = result.expect("search with backslash must succeed");
+    assert!(
+        results.is_empty(),
+        "search for a backslash-containing query should return empty vec (no symbols contain literal backslash); got: {results:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn pack_markdown_fence_content_does_not_inject() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+
+    // File whose content contains triple backticks — a potential fence injection vector.
+    let content_with_backticks = "normal line\n```\ninjected content\n```\nend\n";
+    fs::write(dir.path().join("tricky.txt"), content_with_backticks)
+        .expect("write file with backtick content");
+
+    let output = api::pack(dir.path(), "markdown", None, default_pack_options())
+        .expect("pack with markdown format should succeed");
+
+    // The dynamic fence must use 4 backticks (content has 3) to prevent injection.
+    // The outer fence opener should be exactly 4 backticks — a 3-backtick opener would
+    // be closed prematurely by the ``` inside the file content.
+    // Verify that the file's code block does NOT open with a 3-backtick fence.
+    // The correct pattern is: the code block for tricky.txt opens with "````" (4 backticks).
+    assert!(
+        !output.contains("\n```\nnormal line"),
+        "markdown output must not open the file block with a 3-backtick fence —          that would be closeable by the ``` in the file content (injection); got:\n{output}"
+    );
+
+    // All original content must still be present in the output.
+    assert!(
+        output.contains("normal line"),
+        "markdown output must preserve 'normal line' from the file; got:\n{output}"
+    );
+    assert!(
+        output.contains("injected content"),
+        "markdown output must preserve 'injected content' from the file (inside a code block); got:\n{output}"
+    );
+    assert!(
+        output.contains("end"),
+        "markdown output must preserve 'end' from the file; got:\n{output}"
+    );
+
+    // The outer fence must be 4 backticks (one more than the 3 in the file content).
+    assert!(
+        output.contains("````"),
+        "markdown output should use a 4-backtick fence when file content contains 3 backticks; got:\n{output}"
+    );
+
     Ok(())
 }
 

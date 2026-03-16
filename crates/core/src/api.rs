@@ -251,6 +251,12 @@ pub fn pack(
         }
         let ignore_set = ignore_builder.build().unwrap_or(globset::GlobSet::empty());
 
+        // Security: canonicalize the base directory once before iterating files.
+        // If this fails (e.g. the directory does not exist), propagate the error
+        // rather than silently allowing all paths through the traversal guard.
+        let base_canonical = base_dir.canonicalize()
+            .map_err(|e| anyhow::anyhow!("Cannot resolve base directory '{}': {}", base_dir.display(), e))?;
+
         for path_str in file_paths {
 
             if has_includes && !include_set.is_match(&path_str) {
@@ -269,11 +275,9 @@ pub fn pack(
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            if let Ok(base_canonical) = base_dir.canonicalize() {
-                if !canonical.starts_with(&base_canonical) {
-                    eprintln!("Warning: skipping path that escapes base dir: {}", path_str);
-                    continue;
-                }
+            if !canonical.starts_with(&base_canonical) {
+                eprintln!("Warning: skipping path that escapes base dir: {}", path_str);
+                continue;
             }
 
             // If the user specified a file rather than a directory, only include that specific file

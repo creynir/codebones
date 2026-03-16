@@ -103,13 +103,13 @@ impl Indexer for DefaultIndexer {
                 return Err(IndexerError::PathTraversal(path.to_path_buf()));
             }
 
-            // Symlink escape check
-            if entry.path_is_symlink() && options.follow_symlinks {
-                // Symlink resolved outside the root would have been caught by PathTraversal above;
-                // this is a belt-and-suspenders check for symbolic link policy enforcement.
-                return Err(IndexerError::SymlinkEscape(path.to_path_buf()));
-            } else if entry.path_is_symlink() {
-                continue; // Skip symlinks if not following
+            // Symlink policy:
+            //   - follow_symlinks=false (default): skip symlinks silently.
+            //   - follow_symlinks=true: symlinks that escape the root are already
+            //     rejected by the PathTraversal check above; symlinks inside the
+            //     root are allowed through.
+            if entry.path_is_symlink() && !options.follow_symlinks {
+                continue; // Skip symlinks when not following
             }
 
             // Secret exclusion
@@ -778,6 +778,139 @@ mod tests {
         assert_ne!(
             first_hashes["volatile.rs"], second_hashes["volatile.rs"],
             "volatile.rs hash must change after file modification"
+        );
+    }
+
+    // --- New credential exclusion tests (Gap 3) ---
+
+    #[test]
+    fn test_excludes_id_ecdsa_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("id_ecdsa"), "-----BEGIN EC PRIVATE KEY-----").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        assert!(
+            results.is_empty(),
+            "id_ecdsa must be excluded, got: {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_excludes_tfvars_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("terraform.tfvars"), "db_password = \"secret\"").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        assert!(
+            results.is_empty(),
+            "terraform.tfvars must be excluded, got: {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_excludes_p12_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("keystore.p12"), b"fake pkcs12 binary bytes").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        assert!(
+            results.is_empty(),
+            "keystore.p12 must be excluded, got: {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_indexes_crt_file_without_pem_header() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("cert.crt"), "CERTIFICATE DATA WITHOUT PEM HEADER").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "cert.crt"),
+            "cert.crt without a PEM header must be indexed, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_crt_file_with_pem_header() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(
+            root.join("cert.crt"),
+            "-----BEGIN CERTIFICATE-----\nMIIB...",
+        )
+        .unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "cert.crt"),
+            "cert.crt with a PEM header must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    // --- Symlink within root behavior test (Gap 4) ---
+
+    #[test]
+    #[cfg(unix)]
+    fn test_symlink_within_root_indexed_with_follow_symlinks() {
+        // Documents the current behavior: with follow_symlinks=true, symlinks that
+        // resolve within the root are allowed through and indexed. Only symlinks that
+        // escape the root produce a PathTraversal error.
+        let dir = setup_workspace();
+        let root = dir.path();
+
+        // Create a real file inside the root.
+        let real_file = root.join("real.rs");
+        fs::write(&real_file, "fn real() {}").unwrap();
+
+        // Create a symlink inside the root that points to the real file (still within root).
+        let symlink_path = root.join("link_to_real.rs");
+        std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
+
+        let indexer = DefaultIndexer;
+        let options = IndexerOptions {
+            follow_symlinks: true,
+            ..Default::default()
+        };
+
+        // With follow_symlinks=true, a within-root symlink must be indexed successfully.
+        let result = indexer.index(root, &options);
+        assert!(
+            result.is_ok(),
+            "with follow_symlinks=true, a symlink inside the root must be indexed (not errored); got: {:?}",
+            result
+        );
+        let files = result.unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "link_to_real.rs"),
+            "the within-root symlink must appear in indexed results; got: {:?}",
+            names
         );
     }
 }
