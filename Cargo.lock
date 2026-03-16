@@ -174,12 +174,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
-name = "camino"
-version = "1.2.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e629a66d692cb9ff1a1c664e41771b3dcaf961985a9774c0eb0bd1b51cf60a48"
-
-[[package]]
 name = "cc"
 version = "1.2.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -251,7 +245,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "codebones"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -263,10 +257,9 @@ dependencies = [
 
 [[package]]
 name = "codebones-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
- "camino",
  "globset",
  "hex",
  "ignore",
@@ -292,7 +285,7 @@ dependencies = [
 
 [[package]]
 name = "codebones-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "codebones-core",
@@ -302,12 +295,15 @@ dependencies = [
 
 [[package]]
 name = "codebones-python-ext"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "clap",
  "codebones-core",
+ "predicates",
  "rmcp",
+ "tempfile",
  "tokio",
 ]
 

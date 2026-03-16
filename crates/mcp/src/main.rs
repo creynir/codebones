@@ -1,3 +1,5 @@
+// NOTE: The rmcp module below is a stub. Real MCP implementation is on the
+// feature/mcp-implementation branch. This file will be replaced when that branch merges.
 mod rmcp {
     pub mod server {
         pub struct Server;
@@ -40,7 +42,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_arg("dir", "string", "Directory to index"),
         |args| async move {
-            codebones_core::api::index(std::path::Path::new(&args)).unwrap();
+            codebones_core::api::index(std::path::Path::new(&args))
+                .map_err(|e| anyhow::anyhow!("Index failed: {}", e))?;
             Ok("Indexing complete".into())
         },
     );

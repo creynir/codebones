@@ -7,6 +7,8 @@ pub struct Bone {
     pub metadata: HashMap<String, String>,
 }
 
+/// A zero-sized token used to thread parser access through [`crate::plugin::Packer`].
+/// Instantiate with `Parser {}` to satisfy the `Packer::new` signature.
 pub struct Parser {}
 
 /// Represents the type of symbol extracted.

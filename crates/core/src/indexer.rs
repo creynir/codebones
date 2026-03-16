@@ -81,6 +81,8 @@ impl Indexer for DefaultIndexer {
 
         let walker = builder.build();
 
+        let canonical_root = std::fs::canonicalize(workspace_root)?;
+
         for result in walker {
             let entry = match result {
                 Ok(e) => e,
@@ -93,7 +95,6 @@ impl Indexer for DefaultIndexer {
             }
 
             // Path traversal check
-            let canonical_root = std::fs::canonicalize(workspace_root)?;
             let canonical_path = match std::fs::canonicalize(path) {
                 Ok(p) => p,
                 Err(_) => continue, // Skip broken symlinks or missing files
@@ -102,23 +103,32 @@ impl Indexer for DefaultIndexer {
                 return Err(IndexerError::PathTraversal(path.to_path_buf()));
             }
 
-            // Symlink escape check
-            if entry.path_is_symlink() && options.follow_symlinks {
-                if !canonical_path.starts_with(&canonical_root) {
-                    return Err(IndexerError::SymlinkEscape(path.to_path_buf()));
-                }
-            } else if entry.path_is_symlink() {
-                continue; // Skip symlinks if not following
+            // Symlink policy:
+            //   - follow_symlinks=false (default): skip symlinks silently.
+            //   - follow_symlinks=true: symlinks that escape the root are already
+            //     rejected by the PathTraversal check above; symlinks inside the
+            //     root are allowed through.
+            if entry.path_is_symlink() && !options.follow_symlinks {
+                continue; // Skip symlinks when not following
             }
 
             // Secret exclusion
             let file_name = path.file_name().unwrap_or_default().to_string_lossy();
             if file_name == ".env"
                 || file_name.starts_with(".env.")
+                || file_name == ".envrc"
                 || file_name.ends_with(".pem")
                 || file_name.ends_with(".key")
+                || file_name.ends_with(".tfvars")
+                || file_name.ends_with(".p12")
+                || file_name.ends_with(".pfx")
+                || file_name.ends_with(".jks")
                 || file_name.starts_with("id_rsa")
                 || file_name.starts_with("id_ed25519")
+                || file_name == "id_ecdsa"
+                || file_name == "id_dsa"
+                || file_name == "id_ecdsa_sk"
+                || file_name == "id_xmss"
                 || file_name == "credentials.json"
                 || file_name.ends_with(".secrets")
                 || file_name.ends_with(".token")
@@ -148,11 +158,19 @@ impl Indexer for DefaultIndexer {
                 continue;
             }
 
-            // Binary detection (null bytes)
+            // Binary detection (null bytes) and PEM credential detection
             let mut file = File::open(path)?;
             let mut buffer = [0; 8192];
             let bytes_read = file.read(&mut buffer)?;
-            if buffer[..bytes_read].contains(&0) {
+            let chunk = &buffer[..bytes_read];
+            if chunk.contains(&0) {
+                continue;
+            }
+            // Skip PEM-encoded credential files (private keys, certificates, etc.)
+            if chunk
+                .windows(11)
+                .any(|w| w == b"-----BEGIN ")
+            {
                 continue;
             }
 
@@ -173,7 +191,7 @@ impl Indexer for DefaultIndexer {
             });
 
             count += 1;
-            if count > options.max_file_count {
+            if count >= options.max_file_count {
                 return Err(IndexerError::FileCountLimitExceeded);
             }
         }
@@ -191,12 +209,6 @@ mod tests {
 
     fn setup_workspace() -> TempDir {
         TempDir::new().unwrap()
-    }
-
-    #[test]
-    fn test_rejects_path_traversal() {
-        // This is tricky to simulate with just the walker, but we can test the logic directly if we inject a path.
-        // For the sake of the test, we'll create a symlink that escapes and check symlink escape error.
     }
 
     #[test]
@@ -341,6 +353,564 @@ mod tests {
         assert_eq!(
             results[0].hash,
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+    }
+
+    // --- Secret file exclusion ---
+
+    #[test]
+    fn test_excludes_dotenv_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join(".env"), "SECRET=hunter2").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n == ".env"),
+            ".env must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_id_rsa_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("id_rsa"), "-----BEGIN RSA PRIVATE KEY-----").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n == "id_rsa"),
+            "id_rsa must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_credentials_json_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("credentials.json"), r#"{"token":"secret"}"#).unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n == "credentials.json"),
+            "credentials.json must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_pem_header_file() {
+        // Any file whose content begins with a PEM header must be treated as a
+        // credential and excluded, regardless of its filename or extension.
+        let dir = setup_workspace();
+        let root = dir.path();
+        // Use an unusual extension to confirm the check is content-based, not name-based.
+        fs::write(
+            root.join("server.crt"),
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA...\n-----END RSA PRIVATE KEY-----\n",
+        )
+        .unwrap();
+        fs::write(root.join("normal.txt"), "just text").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "server.crt"),
+            "File with PEM header must be excluded, got: {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n == "normal.txt"),
+            "normal.txt must still be indexed, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_normal_rs_file_is_not_excluded() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            names.iter().any(|n| n == "lib.rs"),
+            "lib.rs must be indexed, got: {:?}",
+            names
+        );
+    }
+
+    // --- Binary file exclusion ---
+
+    #[test]
+    fn test_excludes_exe_extension() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("app.exe"), "MZ fake windows binary").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n.ends_with(".exe")),
+            ".exe must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_png_extension() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        // PNG magic bytes header to make it realistic, but content doesn't matter
+        fs::write(root.join("logo.png"), b"\x89PNG\r\n\x1a\nfake image data").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n.ends_with(".png")),
+            ".png must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_source_file_with_null_bytes() {
+        // A file with a .rs extension but containing null bytes should be treated
+        // as binary and skipped. This catches embedded binaries misnamed as source.
+        let dir = setup_workspace();
+        let root = dir.path();
+        let mut content = b"fn main() { println!(\"hello\"); }\n".to_vec();
+        content.push(0x00); // inject a null byte
+        content.extend_from_slice(b" // more code");
+        fs::write(root.join("tricky.rs"), &content).unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n == "tricky.rs"),
+            "Source file with null bytes must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    // --- Glob filtering via ignore file ---
+
+    #[test]
+    fn test_codebonesignore_glob_excludes_toml_files() {
+        // Simulate "--ignore *.toml" by writing a .codebonesignore with a glob pattern
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+        fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join(".codebonesignore"), "*.toml\n").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+
+        assert!(
+            !names.iter().any(|n| n.ends_with(".toml")),
+            "*.toml files must be excluded via .codebonesignore, got: {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n == "main.rs"),
+            "main.rs must still be indexed, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_gitignore_glob_excludes_matching_files() {
+        // Simulate "--ignore *.log" by writing a .gitignore with a glob pattern
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("app.log"), "INFO: server started").unwrap();
+        fs::write(root.join("server.rs"), "fn serve() {}").unwrap();
+        fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+
+        assert!(
+            !names.iter().any(|n| n.ends_with(".log")),
+            "*.log files must be excluded via .gitignore, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_only_rs_files_indexed_when_all_others_ignored() {
+        // Simulate "--include *.rs only" by ignoring everything else via .codebonesignore
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join("readme.md"), "# Project").unwrap();
+        fs::write(root.join("config.yaml"), "key: value").unwrap();
+        // Use .codebonesignore to exclude non-Rust files
+        fs::write(root.join(".codebonesignore"), "*.md\n*.yaml\n").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+
+        for name in &names {
+            assert!(
+                name.ends_with(".rs"),
+                "Only .rs files should be indexed, but found: {}",
+                name
+            );
+        }
+        assert!(
+            names.iter().any(|n| n == "main.rs"),
+            "main.rs must be in results"
+        );
+    }
+
+    // --- Path traversal security test ---
+
+    #[test]
+    fn test_path_traversal_outside_root_is_rejected_or_absent() {
+        // Create a workspace root and a separate directory outside it.
+        // Attempt to index a path that canonically lives outside the root.
+        // The indexer must either return an error or produce no results
+        // referencing paths outside the workspace root.
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        // Write a file in the workspace
+        fs::write(workspace.path().join("inside.txt"), "safe content").unwrap();
+
+        // Write a file outside the workspace
+        fs::write(outside.path().join("outside.txt"), "secret content").unwrap();
+
+        // Attempt to index using a symlink that escapes the workspace root
+        // (only possible on Unix; on Windows the symlink call is a no-op and we
+        // just verify the walker doesn't traverse outside on its own)
+        #[cfg(unix)]
+        {
+            let link_path = workspace.path().join("escape_link");
+            std::os::unix::fs::symlink(outside.path().join("outside.txt"), &link_path).unwrap();
+
+            let indexer = DefaultIndexer;
+            // With follow_symlinks=false (default) the symlink is either skipped
+            // (Ok with no escaping entry) or rejected outright (Err PathTraversal).
+            // Both are correct — the escaping file must never appear in results.
+            let result = indexer.index(workspace.path(), &IndexerOptions::default());
+            let files = match result {
+                Ok(f) => f,
+                Err(IndexerError::PathTraversal(_)) | Err(IndexerError::SymlinkEscape(_)) => {
+                    vec![] // rejected at the gate — correct behaviour
+                }
+                Err(e) => panic!("Unexpected error with follow_symlinks=false: {}", e),
+            };
+
+            let outside_root = outside.path();
+            for fh in &files {
+                let absolute = workspace.path().join(&fh.path);
+                assert!(
+                    absolute.starts_with(workspace.path()),
+                    "Traversal detected: {:?} is outside {:?}",
+                    absolute,
+                    workspace.path()
+                );
+                assert_ne!(
+                    fh.path.to_string_lossy().as_ref(),
+                    "escape_link",
+                    "Symlink pointing outside root must not be indexed"
+                );
+                let _ = outside_root;
+            }
+        }
+
+        // When follow_symlinks=true, the indexer is expected to return an error
+        // for paths that escape the workspace root.
+        #[cfg(unix)]
+        {
+            let link_path2 = workspace.path().join("escape_link2");
+            // Only create if it doesn't already exist (test may run twice in parallel)
+            if !link_path2.exists() {
+                std::os::unix::fs::symlink(outside.path().join("outside.txt"), &link_path2)
+                    .unwrap();
+            }
+            let indexer = DefaultIndexer;
+            let options = IndexerOptions {
+                follow_symlinks: true,
+                ..Default::default()
+            };
+            let result = indexer.index(workspace.path(), &options);
+            // Must either be an error (PathTraversal/SymlinkEscape) or not include
+            // files that canonically live outside the workspace.
+            match result {
+                Err(IndexerError::PathTraversal(_)) | Err(IndexerError::SymlinkEscape(_)) => {
+                    // Correct: traversal detected and rejected
+                }
+                Ok(files) => {
+                    for fh in &files {
+                        let absolute = workspace.path().join(&fh.path);
+                        assert!(
+                            absolute.starts_with(workspace.path()),
+                            "Returned file escapes workspace: {:?}",
+                            absolute
+                        );
+                    }
+                }
+                Err(other) => panic!("Unexpected error: {}", other),
+            }
+        }
+    }
+
+    // --- Incremental indexing ---
+
+    #[test]
+    fn test_large_file_at_limit_is_indexed_small_file_over_limit_is_skipped() {
+        // The indexer uses `metadata.len() > max_file_size_bytes` (strict greater-than),
+        // so a file of exactly max_file_size_bytes is INCLUDED; one of max+1 is EXCLUDED.
+        let dir = setup_workspace();
+        let root = dir.path();
+
+        let max_size: u64 = 500 * 1024; // 512_000 bytes — the default limit
+
+        // File exactly AT the limit — should be indexed (not greater-than, so passes the check)
+        let at_limit_path = root.join("at_limit.txt");
+        let mut at_limit = File::create(&at_limit_path).unwrap();
+        at_limit.write_all(&vec![b'a'; max_size as usize]).unwrap();
+
+        // File one byte OVER the limit — should be skipped
+        let over_limit_path = root.join("over_limit.txt");
+        let mut over_limit = File::create(&over_limit_path).unwrap();
+        over_limit.write_all(&vec![b'b'; max_size as usize + 1]).unwrap();
+
+        let indexer = DefaultIndexer;
+        let options = IndexerOptions {
+            max_file_size_bytes: max_size,
+            respect_gitignore: false,
+            ..Default::default()
+        };
+
+        let results = indexer.index(root, &options).unwrap();
+        let names: Vec<String> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+
+        assert!(
+            names.iter().any(|n| n == "at_limit.txt"),
+            "File of exactly max_file_size_bytes should be indexed (boundary is exclusive); got: {:?}",
+            names
+        );
+
+        assert!(
+            !names.iter().any(|n| n == "over_limit.txt"),
+            "File of max_file_size_bytes + 1 should NOT be indexed; got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_incremental_indexing_only_changed_file_has_new_hash() {
+        use std::collections::HashMap;
+
+        let dir = setup_workspace();
+        let root = dir.path();
+
+        // Write two files
+        fs::write(root.join("stable.rs"), "fn stable() {}").unwrap();
+        fs::write(root.join("volatile.rs"), "fn original() {}").unwrap();
+
+        let indexer = DefaultIndexer;
+        let options = IndexerOptions {
+            respect_gitignore: false,
+            ..Default::default()
+        };
+
+        // First index pass: record all hashes
+        let first_results = indexer.index(root, &options).unwrap();
+        let first_hashes: HashMap<String, String> = first_results
+            .iter()
+            .map(|fh| (fh.path.to_string_lossy().to_string(), fh.hash.clone()))
+            .collect();
+
+        assert!(
+            first_hashes.contains_key("stable.rs"),
+            "stable.rs must be in first index"
+        );
+        assert!(
+            first_hashes.contains_key("volatile.rs"),
+            "volatile.rs must be in first index"
+        );
+
+        // Modify only volatile.rs
+        fs::write(root.join("volatile.rs"), "fn modified() {}").unwrap();
+
+        // Second index pass
+        let second_results = indexer.index(root, &options).unwrap();
+        let second_hashes: HashMap<String, String> = second_results
+            .iter()
+            .map(|fh| (fh.path.to_string_lossy().to_string(), fh.hash.clone()))
+            .collect();
+
+        // stable.rs hash must be unchanged
+        assert_eq!(
+            first_hashes["stable.rs"], second_hashes["stable.rs"],
+            "stable.rs hash must not change between index passes"
+        );
+
+        // volatile.rs hash must have changed
+        assert_ne!(
+            first_hashes["volatile.rs"], second_hashes["volatile.rs"],
+            "volatile.rs hash must change after file modification"
+        );
+    }
+
+    // --- New credential exclusion tests (Gap 3) ---
+
+    #[test]
+    fn test_excludes_id_ecdsa_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("id_ecdsa"), "-----BEGIN EC PRIVATE KEY-----").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        assert!(
+            results.is_empty(),
+            "id_ecdsa must be excluded, got: {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_excludes_tfvars_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("terraform.tfvars"), "db_password = \"secret\"").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        assert!(
+            results.is_empty(),
+            "terraform.tfvars must be excluded, got: {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_excludes_p12_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("keystore.p12"), b"fake pkcs12 binary bytes").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        assert!(
+            results.is_empty(),
+            "keystore.p12 must be excluded, got: {:?}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_indexes_crt_file_without_pem_header() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("cert.crt"), "CERTIFICATE DATA WITHOUT PEM HEADER").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "cert.crt"),
+            "cert.crt without a PEM header must be indexed, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_crt_file_with_pem_header() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(
+            root.join("cert.crt"),
+            "-----BEGIN CERTIFICATE-----\nMIIB...",
+        )
+        .unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "cert.crt"),
+            "cert.crt with a PEM header must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    // --- Symlink within root behavior test (Gap 4) ---
+
+    #[test]
+    #[cfg(unix)]
+    fn test_symlink_within_root_indexed_with_follow_symlinks() {
+        // Documents the current behavior: with follow_symlinks=true, symlinks that
+        // resolve within the root are allowed through and indexed. Only symlinks that
+        // escape the root produce a PathTraversal error.
+        let dir = setup_workspace();
+        let root = dir.path();
+
+        // Create a real file inside the root.
+        let real_file = root.join("real.rs");
+        fs::write(&real_file, "fn real() {}").unwrap();
+
+        // Create a symlink inside the root that points to the real file (still within root).
+        let symlink_path = root.join("link_to_real.rs");
+        std::os::unix::fs::symlink(&real_file, &symlink_path).unwrap();
+
+        let indexer = DefaultIndexer;
+        let options = IndexerOptions {
+            follow_symlinks: true,
+            ..Default::default()
+        };
+
+        // With follow_symlinks=true, a within-root symlink must be indexed successfully.
+        let result = indexer.index(root, &options);
+        assert!(
+            result.is_ok(),
+            "with follow_symlinks=true, a symlink inside the root must be indexed (not errored); got: {:?}",
+            result
+        );
+        let files = result.unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.iter().any(|n| n == "link_to_real.rs"),
+            "the within-root symlink must appear in indexed results; got: {:?}",
+            names
         );
     }
 }

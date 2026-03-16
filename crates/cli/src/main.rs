@@ -26,9 +26,10 @@ pub enum Commands {
         /// The symbol name (e.g., `src/main.rs::Database.connect`) or file path
         symbol_or_path: String,
     },
-    /// Searches for symbols or text across the repository using FTS5
+    /// Searches for symbols by name substring. Use an empty string ("") to list all indexed symbols.
+    /// Note: % and _ are treated as literals, not wildcards.
     Search {
-        /// The search query
+        /// Substring to match against symbol names. Pass "" to list all symbols.
         query: String,
     },
     /// Packs the repository's skeleton into a single string for LLM context
@@ -124,13 +125,177 @@ fn main() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use assert_cmd::Command;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn setup_e2e_repo() -> TempDir {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+        let rs_content = r#"pub fn greet_user(name: &str) -> String {
+    format!("Hello, {}!", name)
+}
+"#;
+        fs::write(root.join("greet.rs"), rs_content).unwrap();
+        temp
+    }
 
     #[test]
-    fn test_cli_index_and_get_e2e() {}
+    fn test_cli_index_and_get_e2e() {
+        let temp = setup_e2e_repo();
+        let root = temp.path();
+
+        // Index the directory
+        Command::cargo_bin("codebones")
+            .unwrap()
+            .current_dir(root)
+            .args(["index", "."])
+            .assert()
+            .success();
+
+        // Get the file by path — the DB stores relative paths, run from root so "." resolves
+        let output = Command::cargo_bin("codebones")
+            .unwrap()
+            .current_dir(root)
+            .args(["get", "greet.rs"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let stdout = String::from_utf8_lossy(&output);
+        assert!(
+            stdout.contains("greet_user"),
+            "Expected function name in get output, got: {}",
+            stdout
+        );
+        assert!(
+            stdout.contains("Hello"),
+            "Expected function body in get output, got: {}",
+            stdout
+        );
+    }
 
     #[test]
-    fn test_cli_pack_format() {}
+    fn test_cli_pack_format() {
+        let temp = setup_e2e_repo();
+        let root = temp.path();
+
+        // Index first (pack also re-indexes, but be explicit)
+        Command::cargo_bin("codebones")
+            .unwrap()
+            .current_dir(root)
+            .args(["index", "."])
+            .assert()
+            .success();
+
+        // XML format
+        let xml_output = Command::cargo_bin("codebones")
+            .unwrap()
+            .current_dir(root)
+            .args(["pack", ".", "--format", "xml"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let xml_str = String::from_utf8_lossy(&xml_output);
+        assert!(
+            xml_str.contains("<repository>"),
+            "XML output missing <repository>: {}",
+            xml_str
+        );
+        assert!(
+            xml_str.contains("<skeleton_map>"),
+            "XML output missing <skeleton_map>: {}",
+            xml_str
+        );
+        assert!(
+            xml_str.contains("<content>"),
+            "XML output missing <content>: {}",
+            xml_str
+        );
+        assert!(
+            xml_str.contains("</repository>"),
+            "XML output missing </repository>: {}",
+            xml_str
+        );
+
+        // Markdown format
+        let md_output = Command::cargo_bin("codebones")
+            .unwrap()
+            .current_dir(root)
+            .args(["pack", ".", "--format", "markdown"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let md_str = String::from_utf8_lossy(&md_output);
+        assert!(
+            md_str.contains("## Skeleton Map"),
+            "Markdown output missing '## Skeleton Map': {}",
+            md_str
+        );
+    }
 
     #[test]
-    fn test_cli_search_fts5() {}
+    fn test_cli_search_fts5() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path();
+
+        // Write a file with a uniquely named function
+        let rs_content = r#"pub fn unique_function_xyz(x: i32) -> i32 {
+    x * 2
+}
+"#;
+        fs::write(root.join("unique.rs"), rs_content).unwrap();
+
+        // Index
+        Command::cargo_bin("codebones")
+            .unwrap()
+            .current_dir(root)
+            .args(["index", "."])
+            .assert()
+            .success();
+
+        // Search for the unique function — should find it
+        let found_output = Command::cargo_bin("codebones")
+            .unwrap()
+            .current_dir(root)
+            .args(["search", "unique_function_xyz"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let found_str = String::from_utf8_lossy(&found_output);
+        assert!(
+            found_str.contains("unique_function_xyz"),
+            "Search should return the unique function, got: {}",
+            found_str
+        );
+
+        // Search for something that does not exist — should succeed with empty output
+        let empty_output = Command::cargo_bin("codebones")
+            .unwrap()
+            .current_dir(root)
+            .args(["search", "this_function_does_not_exist_anywhere"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+
+        let empty_str = String::from_utf8_lossy(&empty_output);
+        assert!(
+            empty_str.trim().is_empty(),
+            "Search with no results should produce empty output, got: {}",
+            empty_str
+        );
+    }
 }

@@ -6,9 +6,15 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
+/// Walks `dir`, hashes every eligible file, and upserts changed files and their symbols into the local SQLite cache.
+///
+/// Must be called before `get`, `outline`, or `search`; those functions read from the cache `index` populates.
 pub fn index(dir: &Path) -> Result<()> {
     let db_path = dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
     let indexer = DefaultIndexer;
@@ -20,9 +26,14 @@ pub fn index(dir: &Path) -> Result<()> {
 
         if existing_hash.as_deref() != Some(fh.hash.as_str()) {
             let full_path = dir.join(&fh.path);
-            let content = fs::read(&full_path).unwrap_or_default();
+            let content = fs::read(&full_path).unwrap_or_else(|e| {
+                eprintln!("Warning: could not read {}: {}", full_path.display(), e);
+                vec![]
+            });
 
-            // Delete old file to trigger cascade delete of symbols
+            // Delete old file to trigger cascade delete of symbols.
+            // Ignoring the error here is intentional: if the file does not yet exist in
+            // the cache this is a no-op, which is the desired idempotent behaviour.
             let _ = cache.delete_file(&path_str);
 
             let file_id = cache.upsert_file(&path_str, &fh.hash, &content)?;
@@ -50,7 +61,7 @@ pub fn index(dir: &Path) -> Result<()> {
                             byte_offset: sym.full_range.start,
                             byte_length: sym.full_range.end - sym.full_range.start,
                         };
-                        let _ = cache.insert_symbol(&cache_sym);
+                        cache.insert_symbol(&cache_sym)?;
                     }
                 }
             }
@@ -60,9 +71,21 @@ pub fn index(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Retrieves the raw source content of a symbol (using `::` notation) or a file path from the cache.
+///
+/// Returns an error if the symbol or path is not found; run `index` first to populate the cache.
+///
+/// # Security
+///
+/// Path lookup is performed against the SQLite cache only — no filesystem reads occur.
+/// `codebones.db` is a trust boundary: callers must ensure the database file has
+/// appropriate filesystem permissions and has not been tampered with.
 pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
     let db_path = dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
     // It's a symbol if it contains ::
@@ -72,12 +95,7 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
         }
     } else {
         // Assume file path
-        let mut stmt = cache
-            .conn
-            .prepare("SELECT content FROM files WHERE path = ?1")?;
-        let mut rows = stmt.query([symbol_or_path])?;
-        if let Some(row) = rows.next()? {
-            let content: Vec<u8> = row.get(0)?;
+        if let Some(content) = cache.get_file_content(symbol_or_path)? {
             return Ok(String::from_utf8_lossy(&content).to_string());
         }
     }
@@ -85,17 +103,24 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
     anyhow::bail!("Symbol or path not found: {}", symbol_or_path)
 }
 
+/// Returns a skeleton view of a source file by eliding function and class bodies with `...`.
+///
+/// Falls back to the full raw source if the file's language is not supported by the parser.
+///
+/// # Security
+///
+/// Path lookup is performed against the SQLite cache only — no filesystem reads occur.
+/// `codebones.db` is a trust boundary: callers must ensure the database file has
+/// appropriate filesystem permissions and has not been tampered with.
 pub fn outline(dir: &Path, path: &str) -> Result<String> {
     let db_path = dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
-    let mut stmt = cache
-        .conn
-        .prepare("SELECT content FROM files WHERE path = ?1")?;
-    let mut rows = stmt.query([path])?;
-    if let Some(row) = rows.next()? {
-        let content: Vec<u8> = row.get(0)?;
+    if let Some(content) = cache.get_file_content(path)? {
         let source = String::from_utf8_lossy(&content).to_string();
 
         let ext = Path::new(path)
@@ -109,10 +134,11 @@ pub fn outline(dir: &Path, path: &str) -> Result<String> {
             let mut result = String::new();
             let mut last_end = 0;
 
-            let mut sorted_symbols = doc.symbols.clone();
-            sorted_symbols.sort_by_key(|s| s.full_range.start);
+            let mut indices: Vec<usize> = (0..doc.symbols.len()).collect();
+            indices.sort_by_key(|&i| doc.symbols[i].full_range.start);
 
-            for sym in sorted_symbols {
+            for i in &indices {
+                let sym = &doc.symbols[*i];
                 if let Some(body_range) = &sym.body_range {
                     if body_range.start >= last_end {
                         result.push_str(&source[last_end..body_range.start]);
@@ -131,26 +157,25 @@ pub fn outline(dir: &Path, path: &str) -> Result<String> {
     anyhow::bail!("Path not found: {}", path)
 }
 
+/// Searches the cache for symbol IDs whose name contains `query` (substring match).
+///
+/// Returns a list of fully-qualified symbol ID strings; an empty vec means no matches.
 pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
     let db_path = dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
-    // Naive search over symbols name using LIKE
-    let mut stmt = cache
-        .conn
-        .prepare("SELECT id FROM symbols WHERE name LIKE ?1")?;
-    let like_query = format!("%{}%", query);
-    let rows = stmt.query_map([like_query], |row| row.get::<_, String>(0))?;
-
-    let mut results = Vec::new();
-    for row in rows {
-        results.push(row?);
-    }
-
-    Ok(results)
+    let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let like_query = format!("%{}%", escaped);
+    cache.search_symbol_ids(&like_query).map_err(Into::into)
 }
 
+/// Options that control how `pack` filters and transforms files before bundling them.
+///
+/// Set boolean flags to strip comments, empty lines, or long base64 blobs; use `include`/`ignore` glob lists to narrow the file set.
 pub struct PackOptions {
     pub no_file_summary: bool,
     pub no_files: bool,
@@ -161,6 +186,9 @@ pub struct PackOptions {
     pub ignore: Option<Vec<String>>,
 }
 
+/// Bundles all indexed files in `dir` into a single AI-friendly document in Markdown or XML format.
+///
+/// Automatically re-indexes `dir` before packing; pass `max_tokens` to enable token-budget degradation that drops file bodies when the limit is exceeded.
 pub fn pack(
     dir: &Path,
     format_str: &str,
@@ -169,7 +197,12 @@ pub fn pack(
 ) -> Result<String> {
     // If the provided dir is actually a file, use its parent directory for the database
     let base_dir = if dir.is_file() {
-        dir.parent().unwrap_or(Path::new("."))
+        let parent = dir.parent().unwrap_or(Path::new("."));
+        if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        }
     } else {
         dir
     };
@@ -178,7 +211,10 @@ pub fn pack(
     index(base_dir)?;
 
     let db_path = base_dir.join("codebones.db");
-    let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
     let format = match format_str.to_lowercase().as_str() {
@@ -189,8 +225,7 @@ pub fn pack(
     // Get all files
     let mut paths = Vec::new();
     {
-        let mut stmt = cache.conn.prepare("SELECT path FROM files")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let file_paths = cache.list_file_paths()?;
 
         let mut include_builder = globset::GlobSetBuilder::new();
         let mut has_includes = false;
@@ -216,8 +251,13 @@ pub fn pack(
         }
         let ignore_set = ignore_builder.build().unwrap_or(globset::GlobSet::empty());
 
-        for row in rows {
-            let path_str = row?;
+        // Security: canonicalize the base directory once before iterating files.
+        // If this fails (e.g. the directory does not exist), propagate the error
+        // rather than silently allowing all paths through the traversal guard.
+        let base_canonical = base_dir.canonicalize()
+            .map_err(|e| anyhow::anyhow!("Cannot resolve base directory '{}': {}", base_dir.display(), e))?;
+
+        for path_str in file_paths {
 
             if has_includes && !include_set.is_match(&path_str) {
                 continue;
@@ -227,6 +267,18 @@ pub fn pack(
             }
 
             let file_path = base_dir.join(&path_str);
+
+            // Security: verify the DB-stored path doesn't escape the base directory.
+            // If canonicalize fails (e.g. broken symlink), skip the file to avoid
+            // bypassing the traversal guard.
+            let canonical = match file_path.canonicalize() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if !canonical.starts_with(&base_canonical) {
+                eprintln!("Warning: skipping path that escapes base dir: {}", path_str);
+                continue;
+            }
 
             // If the user specified a file rather than a directory, only include that specific file
             if dir.is_file() {

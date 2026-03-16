@@ -74,7 +74,11 @@ fn test_get_and_outline() {
         .args(["outline", "dummy.rs"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("pub fn hello_world()"));
+        .stdout(
+            predicate::str::contains("pub fn hello_world()")
+                // Body elision must be present: the function body should be replaced with ...
+                .and(predicate::str::contains("...")),
+        );
 
     // Get file
     let mut cmd = Command::cargo_bin("codebones").unwrap();
@@ -90,8 +94,9 @@ fn test_pack_base_xml() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
-    let mut cmd = Command::cargo_bin("codebones").unwrap();
-    cmd.current_dir(root)
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
         .args(["pack", ".", "--format", "xml"])
         .assert()
         .success()
@@ -103,7 +108,34 @@ fn test_pack_base_xml() {
                     "<signature>Function hello_world</signature>",
                 ))
                 .and(predicate::str::contains("<![CDATA[")),
-        );
+        )
+        .get_output()
+        .stdout
+        .clone();
+
+    let xml_str = String::from_utf8_lossy(&output);
+
+    // Structural XML validation: output must start with <repository> and end with </repository>
+    let trimmed = xml_str.trim();
+    assert!(
+        trimmed.starts_with("<repository>"),
+        "XML output must start with <repository>, got: {}",
+        &trimmed[..trimmed.len().min(80)]
+    );
+    assert!(
+        trimmed.ends_with("</repository>"),
+        "XML output must end with </repository>, got: ...{}",
+        &trimmed[trimmed.len().saturating_sub(80)..]
+    );
+
+    // Every opening <file tag must have a corresponding </file> closing tag
+    let open_file_tags = xml_str.matches("<file ").count();
+    let close_file_tags = xml_str.matches("</file>").count();
+    assert_eq!(
+        open_file_tags, close_file_tags,
+        "Every <file ...> tag must have a matching </file> ({} open vs {} close)",
+        open_file_tags, close_file_tags
+    );
 }
 
 #[test]
@@ -154,7 +186,7 @@ fn test_pack_flags_no_files() {
 }
 
 #[test]
-fn test_pack_flags_remove_comments_and_empty_lines() {
+fn test_pack_flags_remove_comments() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
@@ -166,7 +198,6 @@ fn test_pack_flags_remove_comments_and_empty_lines() {
             "--format",
             "xml",
             "--remove-comments",
-            "--remove-empty-lines",
         ])
         .assert()
         .success()
@@ -174,7 +205,30 @@ fn test_pack_flags_remove_comments_and_empty_lines() {
             predicate::str::contains("A single line comment")
                 .not()
                 .and(predicate::str::contains("A block comment").not())
-                .and(predicate::str::contains("\n\n\n").not()), // Multiple newlines should be gone
+                // The exact comment string from the fixture must not appear after stripping
+                .and(predicate::str::contains("// A single line comment").not()),
+        );
+}
+
+#[test]
+fn test_pack_flags_remove_empty_lines() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    let mut cmd = Command::cargo_bin("codebones").unwrap();
+    cmd.current_dir(root)
+        .args([
+            "pack",
+            "dummy.rs",
+            "--format",
+            "xml",
+            "--remove-empty-lines",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            // Multiple consecutive newlines should be collapsed
+            predicate::str::contains("\n\n\n").not(),
         );
 }
 
@@ -218,4 +272,46 @@ fn test_pack_flags_include_ignore() {
         .stdout(
             predicate::str::contains("dummy.rs").and(predicate::str::contains("dummy.toml").not()),
         );
+}
+
+#[test]
+fn test_pack_multiple_files() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    // setup_dummy_repo creates dummy.rs AND dummy.toml; both must appear in the skeleton map
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["pack", ".", "--format", "xml"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("dummy.rs").and(predicate::str::contains("dummy.toml")),
+        );
+}
+
+#[test]
+fn test_index_creates_db() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    // The DB must not exist before indexing
+    assert!(
+        !root.join("codebones.db").exists(),
+        "codebones.db should not exist before indexing"
+    );
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["index", "."])
+        .assert()
+        .success();
+
+    // After indexing the DB file must be present
+    assert!(
+        root.join("codebones.db").exists(),
+        "codebones.db must be created after running 'codebones index'"
+    );
 }
