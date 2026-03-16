@@ -285,11 +285,20 @@ impl Packer {
                         Self::xml_escape(&path.display().to_string())
                     ));
                     if !degrade_to_bones {
-                        let safe_content = content.replace("]]>", "]]]]><![CDATA[>");
-                        output.push_str(&format!(
-                            "    <content><![CDATA[\n{}\n]]></content>\n",
-                            safe_content
-                        ));
+                        let safe_content = Self::xml_escape_cdata(&content);
+                        if safe_content == content {
+                            output.push_str(&format!(
+                                "    <content><![CDATA[\n{}\n]]></content>\n",
+                                safe_content
+                            ));
+                        } else {
+                            // Content contains ]]> which cannot be safely embedded in CDATA;
+                            // fall back to XML entity escaping so the document stays well-formed.
+                            output.push_str(&format!(
+                                "    <content>{}</content>\n",
+                                Self::xml_escape(&content)
+                            ));
+                        }
                     }
                     // Only print bones block if plugins added metadata
                     let has_metadata = bones.iter().any(|b| !b.metadata.is_empty());
