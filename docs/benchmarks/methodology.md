@@ -1,5 +1,5 @@
 # Benchmark Methodology
-Status: Complete (2026-03-15 baseline)
+Status: Complete (2026-03-16 baseline)
 
 ## Scope Freeze
 Scope is frozen by semantic feature eligibility in:
@@ -58,7 +58,7 @@ Dataset profile and pinned revisions for this baseline:
 - Timing and memory capture: `/usr/bin/time -l`.
 - Timeout value for each `TIMEOUT` row is recorded in output as `timeout_ms`.
 
-Machine baseline for this run:
+Machine baseline for this run (2026-03-16):
 - OS: macOS 15.7.1 (`24G231`)
 - CPU: Apple M4
 - Memory: 16 GB (`17179869184` bytes)
@@ -108,7 +108,7 @@ Pinned revisions used for this baseline:
 
 | Tool | Version / Commit |
 |---|---|
-| `codebones` | `codebones 0.2.0`, commit `a429bad35b42` |
+| `codebones` | `codebones 0.3.0`, commit `4b65d43b9b79` |
 | `ast-grep` | `ast-grep 0.41.1`, commit `133d85647524` |
 | `grep-ast` | commit `9a2c49b00852` |
 | `tree-sitter-mcp` | commit `d2b82eb8db63` |
@@ -151,11 +151,11 @@ codebones pack --format markdown .
 node repomix/bin/repomix.cjs --stdout
 ```
 
-Per-run command strings are also preserved verbatim in `raw-YYYY-MM-DD.csv` (`command` column).
+Per-run command strings are also preserved verbatim in `raw.csv` (`command` column).
 
 ## Deliverables
 - `docs/benchmarks/methodology.md`
-- `docs/benchmarks/results-YYYY-MM-DD.md`
-- `docs/benchmarks/raw-YYYY-MM-DD.csv`
-- `docs/benchmarks/correctness-YYYY-MM-DD.csv`
-- `docs/benchmarks/normalized-YYYY-MM-DD.csv`
+- `docs/benchmarks/results.md`
+- `docs/benchmarks/raw.csv`
+- `docs/benchmarks/correctness.csv`
+- `docs/benchmarks/normalized.csv`
