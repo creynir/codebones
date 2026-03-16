@@ -429,9 +429,7 @@ mod tests {
         let cache = SqliteCache::new_in_memory().unwrap();
         cache.init().unwrap();
 
-        let file_id = cache
-            .upsert_file("src/empty.rs", "hempty", b"")
-            .unwrap();
+        let file_id = cache.upsert_file("src/empty.rs", "hempty", b"").unwrap();
 
         let symbol = Symbol {
             id: "sym_empty_name".to_string(),
@@ -481,9 +479,7 @@ mod tests {
 
         let long_name: String = "a".repeat(1000);
         let content = vec![b'x'; 1000];
-        let file_id = cache
-            .upsert_file("src/long.rs", "hlong", &content)
-            .unwrap();
+        let file_id = cache.upsert_file("src/long.rs", "hlong", &content).unwrap();
 
         let symbol = Symbol {
             id: "sym_long_name".to_string(),
@@ -559,9 +555,7 @@ mod tests {
         cache.init().unwrap();
 
         let path = "src/my project/file (v2) [draft].rs";
-        let id = cache
-            .upsert_file(path, "hspecial", b"fn x() {}")
-            .unwrap();
+        let id = cache.upsert_file(path, "hspecial", b"fn x() {}").unwrap();
         assert!(id > 0);
 
         let hash = cache.get_file_hash(path).unwrap();

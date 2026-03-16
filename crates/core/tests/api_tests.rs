@@ -91,7 +91,10 @@ fn index_idempotent_on_unchanged_directory() -> Result<(), Box<dyn std::error::E
     let db_path = dir.path().join("codebones.db");
     let conn = rusqlite::Connection::open(&db_path)?;
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
-    assert_eq!(count, 1, "re-indexing unchanged dir should not duplicate file rows");
+    assert_eq!(
+        count, 1,
+        "re-indexing unchanged dir should not duplicate file rows"
+    );
     Ok(())
 }
 
@@ -139,14 +142,22 @@ fn index_skips_binary_files_without_error() -> Result<(), Box<dyn std::error::Er
 
     // The normal text file should be indexed, binary skipped.
     let results = api::search(dir.path(), "add").expect("search after index");
-    assert!(!results.is_empty(), "normal file should be indexed despite binary sibling");
+    assert!(
+        !results.is_empty(),
+        "normal file should be indexed despite binary sibling"
+    );
     Ok(())
 }
 
 #[test]
 fn index_returns_error_for_nonexistent_directory() {
-    let result = api::index(std::path::Path::new("/nonexistent/path/that/does/not/exist/xyz"));
-    assert!(result.is_err(), "indexing nonexistent directory should return an error");
+    let result = api::index(std::path::Path::new(
+        "/nonexistent/path/that/does/not/exist/xyz",
+    ));
+    assert!(
+        result.is_err(),
+        "indexing nonexistent directory should return an error"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -191,7 +202,10 @@ fn index_skips_permission_denied_file_and_continues() -> Result<(), Box<dyn std:
     fs::set_permissions(&restricted, perms)?;
 
     let results = api::search(dir.path(), "greet").expect("search");
-    assert!(!results.is_empty(), "readable file should be indexed even when sibling is unreadable");
+    assert!(
+        !results.is_empty(),
+        "readable file should be indexed even when sibling is unreadable"
+    );
     Ok(())
 }
 
@@ -211,7 +225,8 @@ fn get_returns_source_for_known_symbol() -> Result<(), Box<dyn std::error::Error
     assert!(!results.is_empty(), "should find 'add' symbol");
 
     let symbol_id = &results[0];
-    let source = api::get(dir.path(), symbol_id).expect("get should return source for known symbol");
+    let source =
+        api::get(dir.path(), symbol_id).expect("get should return source for known symbol");
     assert!(
         source.contains("add"),
         "returned source should contain the symbol name 'add'; got: {source}"
@@ -241,7 +256,10 @@ fn get_returns_error_for_nonexistent_symbol() -> Result<(), Box<dyn std::error::
     api::index(dir.path()).expect("index");
 
     let result = api::get(dir.path(), "lib.rs::nonexistent_symbol_xyz");
-    assert!(result.is_err(), "get with missing symbol should return an error");
+    assert!(
+        result.is_err(),
+        "get with missing symbol should return an error"
+    );
     Ok(())
 }
 
@@ -250,7 +268,10 @@ fn get_returns_error_when_no_index_exists() {
     let dir = TempDir::new().expect("failed to create tempdir");
     // No index was ever created.
     let result = api::get(dir.path(), "lib.rs");
-    assert!(result.is_err(), "get without a prior index should return an error");
+    assert!(
+        result.is_err(),
+        "get without a prior index should return an error"
+    );
 }
 
 #[test]
@@ -294,14 +315,16 @@ fn outline_elides_function_bodies_with_ellipsis() -> Result<(), Box<dyn std::err
 }
 
 #[test]
-fn outline_falls_back_to_raw_content_for_unsupported_type() -> Result<(), Box<dyn std::error::Error>> {
+fn outline_falls_back_to_raw_content_for_unsupported_type() -> Result<(), Box<dyn std::error::Error>>
+{
     let dir = TempDir::new().expect("failed to create tempdir");
     let txt_path = dir.path().join("notes.txt");
     fs::write(&txt_path, "This is plain text.\nNo code here.").expect("write txt file");
     api::index(dir.path()).expect("index");
 
     // .txt is unsupported; outline should return raw content unchanged.
-    let outline = api::outline(dir.path(), "notes.txt").expect("outline of txt file should succeed");
+    let outline =
+        api::outline(dir.path(), "notes.txt").expect("outline of txt file should succeed");
     assert!(
         outline.contains("This is plain text."),
         "outline of unsupported type should return raw content; got: {outline}"
@@ -315,7 +338,10 @@ fn outline_returns_error_for_nonexistent_file() -> Result<(), Box<dyn std::error
     api::index(dir.path()).expect("index");
 
     let result = api::outline(dir.path(), "does_not_exist.rs");
-    assert!(result.is_err(), "outline of nonexistent file should return an error");
+    assert!(
+        result.is_err(),
+        "outline of nonexistent file should return an error"
+    );
     Ok(())
 }
 
@@ -325,7 +351,8 @@ fn outline_handles_empty_file() -> Result<(), Box<dyn std::error::Error>> {
     fs::write(dir.path().join("empty.rs"), "").expect("write empty file");
     api::index(dir.path()).expect("index");
 
-    let outline = api::outline(dir.path(), "empty.rs").expect("outline of empty file should succeed");
+    let outline =
+        api::outline(dir.path(), "empty.rs").expect("outline of empty file should succeed");
     assert!(
         outline.is_empty() || outline.trim().is_empty(),
         "outline of empty file should be empty; got: '{outline}'"
@@ -378,7 +405,8 @@ fn search_returns_empty_vec_for_no_matches() -> Result<(), Box<dyn std::error::E
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
     api::index(dir.path()).expect("index");
 
-    let results = api::search(dir.path(), "zzznonexistentsymbolzzz").expect("search should succeed");
+    let results =
+        api::search(dir.path(), "zzznonexistentsymbolzzz").expect("search should succeed");
     assert!(
         results.is_empty(),
         "search with no matches should return empty vec, not an error"
@@ -621,8 +649,8 @@ fn pack_no_files_produces_skeleton_map_only() -> Result<(), Box<dyn std::error::
         no_files: true,
         ..default_pack_options()
     };
-    let output = api::pack(dir.path(), "xml", None, options)
-        .expect("pack with no_files should succeed");
+    let output =
+        api::pack(dir.path(), "xml", None, options).expect("pack with no_files should succeed");
 
     assert!(
         output.contains("<skeleton_map>"),
@@ -636,7 +664,8 @@ fn pack_no_files_produces_skeleton_map_only() -> Result<(), Box<dyn std::error::
 }
 
 #[test]
-fn pack_no_file_summary_omits_skeleton_map_and_includes_content() -> Result<(), Box<dyn std::error::Error>> {
+fn pack_no_file_summary_omits_skeleton_map_and_includes_content(
+) -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
@@ -670,8 +699,8 @@ fn pack_include_glob_filters_to_matching_files() -> Result<(), Box<dyn std::erro
         include: Some(vec!["*.rs".to_string()]),
         ..default_pack_options()
     };
-    let output = api::pack(dir.path(), "xml", None, options)
-        .expect("pack with include glob should succeed");
+    let output =
+        api::pack(dir.path(), "xml", None, options).expect("pack with include glob should succeed");
 
     assert!(
         !output.contains("readme.txt"),
@@ -694,8 +723,8 @@ fn pack_ignore_glob_excludes_matching_files() -> Result<(), Box<dyn std::error::
         ignore: Some(vec!["other.rs".to_string()]),
         ..default_pack_options()
     };
-    let output = api::pack(dir.path(), "xml", None, options)
-        .expect("pack with ignore glob should succeed");
+    let output =
+        api::pack(dir.path(), "xml", None, options).expect("pack with ignore glob should succeed");
 
     assert!(
         !output.contains("other.rs"),
@@ -827,14 +856,16 @@ fn search_finds_symbol_across_multiple_indexed_files() -> Result<(), Box<dyn std
 }
 
 #[test]
-fn get_returns_full_source_for_file_with_unicode_content() -> Result<(), Box<dyn std::error::Error>> {
+fn get_returns_full_source_for_file_with_unicode_content() -> Result<(), Box<dyn std::error::Error>>
+{
     let dir = TempDir::new().expect("failed to create tempdir");
-    let unicode_content = "// 日本語コメント\npub fn hello() -> &'static str {\n    \"こんにちは\"\n}\n";
+    let unicode_content =
+        "// 日本語コメント\npub fn hello() -> &'static str {\n    \"こんにちは\"\n}\n";
     fs::write(dir.path().join("unicode.rs"), unicode_content).expect("write unicode file");
     api::index(dir.path()).expect("index");
 
-    let content = api::get(dir.path(), "unicode.rs")
-        .expect("get file with unicode content should succeed");
+    let content =
+        api::get(dir.path(), "unicode.rs").expect("get file with unicode content should succeed");
 
     assert!(
         content.contains("日本語コメント"),
@@ -848,7 +879,10 @@ fn outline_returns_error_when_no_index_exists() {
     let dir = TempDir::new().expect("failed to create tempdir");
     // No index — outline should fail.
     let result = api::outline(dir.path(), "missing.rs");
-    assert!(result.is_err(), "outline without prior index should return an error");
+    assert!(
+        result.is_err(),
+        "outline without prior index should return an error"
+    );
 }
 
 #[test]
@@ -903,4 +937,3 @@ fn pack_with_xml_special_chars_in_symbol_names() -> Result<(), Box<dyn std::erro
 
     Ok(())
 }
-

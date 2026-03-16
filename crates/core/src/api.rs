@@ -168,7 +168,10 @@ pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
     let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
-    let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let escaped = query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
     let like_query = format!("%{}%", escaped);
     cache.search_symbol_ids(&like_query).map_err(Into::into)
 }
@@ -254,11 +257,15 @@ pub fn pack(
         // Security: canonicalize the base directory once before iterating files.
         // If this fails (e.g. the directory does not exist), propagate the error
         // rather than silently allowing all paths through the traversal guard.
-        let base_canonical = base_dir.canonicalize()
-            .map_err(|e| anyhow::anyhow!("Cannot resolve base directory '{}': {}", base_dir.display(), e))?;
+        let base_canonical = base_dir.canonicalize().map_err(|e| {
+            anyhow::anyhow!(
+                "Cannot resolve base directory '{}': {}",
+                base_dir.display(),
+                e
+            )
+        })?;
 
         for path_str in file_paths {
-
             if has_includes && !include_set.is_match(&path_str) {
                 continue;
             }

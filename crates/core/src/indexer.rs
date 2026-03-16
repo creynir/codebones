@@ -167,10 +167,7 @@ impl Indexer for DefaultIndexer {
                 continue;
             }
             // Skip PEM-encoded credential files (private keys, certificates, etc.)
-            if chunk
-                .windows(11)
-                .any(|w| w == b"-----BEGIN ")
-            {
+            if chunk.windows(11).any(|w| w == b"-----BEGIN ") {
                 continue;
             }
 
@@ -366,7 +363,10 @@ mod tests {
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
         assert!(
             !names.iter().any(|n| n == ".env"),
             ".env must be excluded, got: {:?}",
@@ -382,7 +382,10 @@ mod tests {
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
         assert!(
             !names.iter().any(|n| n == "id_rsa"),
             "id_rsa must be excluded, got: {:?}",
@@ -398,7 +401,10 @@ mod tests {
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
         assert!(
             !names.iter().any(|n| n == "credentials.json"),
             "credentials.json must be excluded, got: {:?}",
@@ -442,11 +448,18 @@ mod tests {
     fn test_normal_rs_file_is_not_excluded() {
         let dir = setup_workspace();
         let root = dir.path();
-        fs::write(root.join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }").unwrap();
+        fs::write(
+            root.join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }",
+        )
+        .unwrap();
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
         assert!(
             names.iter().any(|n| n == "lib.rs"),
             "lib.rs must be indexed, got: {:?}",
@@ -464,7 +477,10 @@ mod tests {
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
         assert!(
             !names.iter().any(|n| n.ends_with(".exe")),
             ".exe must be excluded, got: {:?}",
@@ -481,7 +497,10 @@ mod tests {
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
         assert!(
             !names.iter().any(|n| n.ends_with(".png")),
             ".png must be excluded, got: {:?}",
@@ -502,7 +521,10 @@ mod tests {
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
         assert!(
             !names.iter().any(|n| n == "tricky.rs"),
             "Source file with null bytes must be excluded, got: {:?}",
@@ -523,7 +545,10 @@ mod tests {
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
 
         assert!(
             !names.iter().any(|n| n.ends_with(".toml")),
@@ -548,7 +573,10 @@ mod tests {
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
 
         assert!(
             !names.iter().any(|n| n.ends_with(".log")),
@@ -570,7 +598,10 @@ mod tests {
 
         let indexer = DefaultIndexer;
         let results = indexer.index(root, &IndexerOptions::default()).unwrap();
-        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        let names: Vec<_> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
 
         for name in &names {
             assert!(
@@ -697,7 +728,9 @@ mod tests {
         // File one byte OVER the limit — should be skipped
         let over_limit_path = root.join("over_limit.txt");
         let mut over_limit = File::create(&over_limit_path).unwrap();
-        over_limit.write_all(&vec![b'b'; max_size as usize + 1]).unwrap();
+        over_limit
+            .write_all(&vec![b'b'; max_size as usize + 1])
+            .unwrap();
 
         let indexer = DefaultIndexer;
         let options = IndexerOptions {

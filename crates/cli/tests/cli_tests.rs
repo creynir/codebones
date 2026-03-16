@@ -192,13 +192,7 @@ fn test_pack_flags_remove_comments() {
 
     let mut cmd = Command::cargo_bin("codebones").unwrap();
     cmd.current_dir(root)
-        .args([
-            "pack",
-            "dummy.rs",
-            "--format",
-            "xml",
-            "--remove-comments",
-        ])
+        .args(["pack", "dummy.rs", "--format", "xml", "--remove-comments"])
         .assert()
         .success()
         .stdout(
@@ -286,9 +280,7 @@ fn test_pack_multiple_files() {
         .args(["pack", ".", "--format", "xml"])
         .assert()
         .success()
-        .stdout(
-            predicate::str::contains("dummy.rs").and(predicate::str::contains("dummy.toml")),
-        );
+        .stdout(predicate::str::contains("dummy.rs").and(predicate::str::contains("dummy.toml")));
 }
 
 #[test]

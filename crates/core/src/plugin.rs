@@ -166,14 +166,20 @@ impl Packer {
             let mut raw_content = match std::fs::read_to_string(path) {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!("Warning: skipping unreadable file {}: {}", path.display(), e);
+                    eprintln!(
+                        "Warning: skipping unreadable file {}: {}",
+                        path.display(),
+                        e
+                    );
                     continue;
                 }
             };
 
             if self.remove_empty_lines {
                 raw_content = RE_EMPTY_LINES
-                    .get_or_init(|| regex::Regex::new(r"\n\s*\n").expect("valid static regex: empty lines"))
+                    .get_or_init(|| {
+                        regex::Regex::new(r"\n\s*\n").expect("valid static regex: empty lines")
+                    })
                     .replace_all(&raw_content, "\n")
                     .to_string();
             }
@@ -181,7 +187,10 @@ impl Packer {
             if self.truncate_base64 {
                 // Truncate long hex or base64 looking strings (length > 100)
                 raw_content = RE_BASE64
-                    .get_or_init(|| regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").expect("valid static regex: base64"))
+                    .get_or_init(|| {
+                        regex::Regex::new(r"[A-Za-z0-9+/=]{100,}")
+                            .expect("valid static regex: base64")
+                    })
                     .replace_all(&raw_content, "[TRUNCATED_BASE64]")
                     .to_string();
             }
@@ -213,12 +222,16 @@ impl Packer {
                         // Simple regex fallback for comments (C-style, Python, HTML)
                         result = RE_BLOCK_COMMENT
                             .get_or_init(|| {
-                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").expect("valid static regex: block comment")
+                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->")
+                                    .expect("valid static regex: block comment")
                             })
                             .replace_all(&result, "")
                             .to_string();
                         result = RE_LINE_COMMENT
-                            .get_or_init(|| regex::Regex::new(r"(?m)(//|#).*\n").expect("valid static regex: line comment"))
+                            .get_or_init(|| {
+                                regex::Regex::new(r"(?m)(//|#).*\n")
+                                    .expect("valid static regex: line comment")
+                            })
                             .replace_all(&result, "\n")
                             .to_string();
                     }
@@ -228,12 +241,16 @@ impl Packer {
                     if self.remove_comments {
                         let no_blocks = RE_BLOCK_COMMENT
                             .get_or_init(|| {
-                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").expect("valid static regex: block comment")
+                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->")
+                                    .expect("valid static regex: block comment")
                             })
                             .replace_all(&raw_content, "")
                             .to_string();
                         RE_LINE_COMMENT
-                            .get_or_init(|| regex::Regex::new(r"(?m)(//|#).*\n").expect("valid static regex: line comment"))
+                            .get_or_init(|| {
+                                regex::Regex::new(r"(?m)(//|#).*\n")
+                                    .expect("valid static regex: line comment")
+                            })
                             .replace_all(&no_blocks, "\n")
                             .to_string()
                     } else {
@@ -398,7 +415,8 @@ mod tests {
         let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let file_path = dir.path().join("sample.rs");
         let mut f = std::fs::File::create(&file_path).expect("failed to create temp file");
-        f.write_all(content.as_bytes()).expect("failed to write file content");
+        f.write_all(content.as_bytes())
+            .expect("failed to write file content");
         (dir, file_path)
     }
 
@@ -407,8 +425,16 @@ mod tests {
         let plugin = MockPlugin;
         assert!(plugin.detect(Path::new(".")));
         let mut bones = vec![Bone::default()];
-        plugin.enrich(Path::new("any_file.rs"), &mut bones).expect("enrich should succeed");
-        assert_eq!(bones[0].metadata.get("injected").expect("injected key must be present"), "true");
+        plugin
+            .enrich(Path::new("any_file.rs"), &mut bones)
+            .expect("enrich should succeed");
+        assert_eq!(
+            bones[0]
+                .metadata
+                .get("injected")
+                .expect("injected key must be present"),
+            "true"
+        );
     }
 
     #[test]
@@ -556,7 +582,8 @@ mod tests {
     fn make_temp_file(dir: &tempfile::TempDir, filename: &str, content: &str) -> PathBuf {
         let file_path = dir.path().join(filename);
         let mut f = std::fs::File::create(&file_path).expect("failed to create temp file");
-        f.write_all(content.as_bytes()).expect("failed to write file content");
+        f.write_all(content.as_bytes())
+            .expect("failed to write file content");
         file_path
     }
 
@@ -576,7 +603,9 @@ mod tests {
         cache.init().expect("failed to init cache schema");
 
         // Insert a file + symbol with XML-dangerous characters in the name.
-        let file_id = cache.upsert_file("bad.rs", "h1", b"fn bad() {}").expect("upsert_file should succeed");
+        let file_id = cache
+            .upsert_file("bad.rs", "h1", b"fn bad() {}")
+            .expect("upsert_file should succeed");
         cache
             .insert_symbol(&crate::cache::Symbol {
                 id: "s1".to_string(),
@@ -596,8 +625,8 @@ mod tests {
             Parser {},
             OutputFormat::Xml,
             None,
-            false,  // no_file_summary
-            false,  // no_files
+            false, // no_file_summary
+            false, // no_files
             false,
             false,
             false,
@@ -712,7 +741,8 @@ mod tests {
         );
 
         // Strip all CDATA sections before checking for bare angle brackets.
-        let cdata_re = regex::Regex::new(r"(?s)<!\[CDATA\[.*?]]>").expect("failed to compile cdata regex");
+        let cdata_re =
+            regex::Regex::new(r"(?s)<!\[CDATA\[.*?]]>").expect("failed to compile cdata regex");
         let stripped = cdata_re.replace_all(&output, "");
 
         // Any remaining < must be the start of a tag (followed by [/a-zA-Z!?])
@@ -746,11 +776,7 @@ mod tests {
         let file_path = make_temp_file(&dir, "lib.rs", "fn alpha() {}\n");
 
         let file_id = cache
-            .upsert_file(
-                file_path.to_string_lossy().as_ref(),
-                "h2",
-                b"fn alpha() {}",
-            )
+            .upsert_file(file_path.to_string_lossy().as_ref(), "h2", b"fn alpha() {}")
             .expect("upsert_file should succeed");
         cache
             .insert_symbol(&crate::cache::Symbol {
@@ -777,7 +803,10 @@ mod tests {
         let output = packer.pack(&[file_path]).expect("pack should succeed");
 
         // The file should appear as a bullet: "- <path>"
-        assert!(output.contains("- "), "File bullet not found in Markdown output");
+        assert!(
+            output.contains("- "),
+            "File bullet not found in Markdown output"
+        );
 
         // Each symbol under the file should be indented with two spaces: "  - kind name"
         assert!(
@@ -800,11 +829,7 @@ mod tests {
         let file_path = make_temp_file(&dir, "weird.rs", "fn weird() {}\n");
 
         let file_id = cache
-            .upsert_file(
-                file_path.to_string_lossy().as_ref(),
-                "h3",
-                b"fn weird() {}",
-            )
+            .upsert_file(file_path.to_string_lossy().as_ref(), "h3", b"fn weird() {}")
             .expect("upsert_file should succeed");
         // Symbol name with markdown special characters
         cache
@@ -903,9 +928,8 @@ mod tests {
     /// Degradation due to token exhaustion must be graceful — no panic, no Err.
     #[test]
     fn test_token_governor_graceful_degradation_no_panic() {
-        let (_dir, file_path) = make_temp_rs_file(
-            "fn a() { 1 }\nfn b() { 2 }\nfn c() { 3 }\nfn d() { 4 }\n",
-        );
+        let (_dir, file_path) =
+            make_temp_rs_file("fn a() { 1 }\nfn b() { 2 }\nfn c() { 3 }\nfn d() { 4 }\n");
 
         for budget in [0usize, 1, 5, 50] {
             let packer = Packer::new(
@@ -1164,7 +1188,10 @@ mod tests {
 
         assert!(output.contains("one.txt"), "one.txt missing from output");
         assert!(output.contains("two.txt"), "two.txt missing from output");
-        assert!(output.contains("three.txt"), "three.txt missing from output");
+        assert!(
+            output.contains("three.txt"),
+            "three.txt missing from output"
+        );
     }
 
     /// Files must appear in the skeleton map in the same order they were supplied
@@ -1235,7 +1262,10 @@ mod tests {
 
         let output = result.expect("pack should succeed even when file is deleted");
         // The output should still be a well-formed XML document.
-        assert!(output.contains("<repository>"), "Output must start with <repository>");
+        assert!(
+            output.contains("<repository>"),
+            "Output must start with <repository>"
+        );
         assert!(
             output.trim_end().ends_with("</repository>"),
             "Output must end with </repository>"
@@ -1326,5 +1356,4 @@ mod tests {
             output
         );
     }
-
 }
