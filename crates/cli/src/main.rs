@@ -26,9 +26,10 @@ pub enum Commands {
         /// The symbol name (e.g., `src/main.rs::Database.connect`) or file path
         symbol_or_path: String,
     },
-    /// Searches for symbols or text across the repository using FTS5
+    /// Searches for symbols by name substring. Use an empty string ("") to list all indexed symbols.
+    /// Note: % and _ are treated as literals, not wildcards.
     Search {
-        /// The search query
+        /// Substring to match against symbol names. Pass "" to list all symbols.
         query: String,
     },
     /// Packs the repository's skeleton into a single string for LLM context
