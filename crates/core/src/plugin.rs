@@ -517,12 +517,14 @@ mod tests {
         // Insert a file + symbol with XML-dangerous characters in the name.
         let file_id = cache.upsert_file("bad.rs", "h1", b"fn bad() {}").expect("upsert_file should succeed");
         cache
-            .conn
-            .execute(
-                "INSERT INTO symbols (id, file_id, name, kind, byte_offset, byte_length) \
-                 VALUES ('s1', ?1, '<script>&\"test\"</script>', 'function', 0, 11)",
-                rusqlite::params![file_id],
-            )
+            .insert_symbol(&crate::cache::Symbol {
+                id: "s1".to_string(),
+                file_id,
+                name: "<script>&\"test\"</script>".to_string(),
+                kind: "function".to_string(),
+                byte_offset: 0,
+                byte_length: 11,
+            })
             .expect("symbol insert should succeed");
 
         let dir = tempfile::TempDir::new().expect("failed to create temp dir");
@@ -690,12 +692,14 @@ mod tests {
             )
             .expect("upsert_file should succeed");
         cache
-            .conn
-            .execute(
-                "INSERT INTO symbols (id, file_id, name, kind, byte_offset, byte_length) \
-                 VALUES ('s_alpha', ?1, 'alpha', 'function', 0, 13)",
-                rusqlite::params![file_id],
-            )
+            .insert_symbol(&crate::cache::Symbol {
+                id: "s_alpha".to_string(),
+                file_id,
+                name: "alpha".to_string(),
+                kind: "function".to_string(),
+                byte_offset: 0,
+                byte_length: 13,
+            })
             .expect("symbol insert should succeed");
 
         let packer = Packer::new(

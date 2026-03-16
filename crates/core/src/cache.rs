@@ -56,7 +56,7 @@ pub trait CacheStore {
 }
 
 pub struct SqliteCache {
-    pub(crate) conn: Connection,
+    conn: Connection,
 }
 
 impl SqliteCache {
