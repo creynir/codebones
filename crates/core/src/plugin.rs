@@ -172,7 +172,7 @@ impl Packer {
 
             if self.remove_empty_lines {
                 raw_content = RE_EMPTY_LINES
-                    .get_or_init(|| regex::Regex::new(r"\n\s*\n").unwrap())
+                    .get_or_init(|| regex::Regex::new(r"\n\s*\n").expect("valid static regex: empty lines"))
                     .replace_all(&raw_content, "\n")
                     .to_string();
             }
@@ -180,7 +180,7 @@ impl Packer {
             if self.truncate_base64 {
                 // Truncate long hex or base64 looking strings (length > 100)
                 raw_content = RE_BASE64
-                    .get_or_init(|| regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").unwrap())
+                    .get_or_init(|| regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").expect("valid static regex: base64"))
                     .replace_all(&raw_content, "[TRUNCATED_BASE64]")
                     .to_string();
             }
@@ -212,12 +212,12 @@ impl Packer {
                         // Simple regex fallback for comments (C-style, Python, HTML)
                         result = RE_BLOCK_COMMENT
                             .get_or_init(|| {
-                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap()
+                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").expect("valid static regex: block comment")
                             })
                             .replace_all(&result, "")
                             .to_string();
                         result = RE_LINE_COMMENT
-                            .get_or_init(|| regex::Regex::new(r"(?m)(//|#).*\n").unwrap())
+                            .get_or_init(|| regex::Regex::new(r"(?m)(//|#).*\n").expect("valid static regex: line comment"))
                             .replace_all(&result, "\n")
                             .to_string();
                     }
@@ -227,12 +227,12 @@ impl Packer {
                     if self.remove_comments {
                         let no_blocks = RE_BLOCK_COMMENT
                             .get_or_init(|| {
-                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap()
+                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").expect("valid static regex: block comment")
                             })
                             .replace_all(&raw_content, "")
                             .to_string();
                         RE_LINE_COMMENT
-                            .get_or_init(|| regex::Regex::new(r"(?m)(//|#).*\n").unwrap())
+                            .get_or_init(|| regex::Regex::new(r"(?m)(//|#).*\n").expect("valid static regex: line comment"))
                             .replace_all(&no_blocks, "\n")
                             .to_string()
                     } else {

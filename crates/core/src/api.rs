@@ -249,13 +249,17 @@ pub fn pack(
 
             let file_path = base_dir.join(&path_str);
 
-            // Security: verify the DB-stored path doesn't escape the base directory
-            if let Ok(canonical) = file_path.canonicalize() {
-                if let Ok(base_canonical) = base_dir.canonicalize() {
-                    if !canonical.starts_with(&base_canonical) {
-                        eprintln!("Warning: skipping path that escapes base dir: {}", path_str);
-                        continue;
-                    }
+            // Security: verify the DB-stored path doesn't escape the base directory.
+            // If canonicalize fails (e.g. broken symlink), skip the file to avoid
+            // bypassing the traversal guard.
+            let canonical = match file_path.canonicalize() {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            if let Ok(base_canonical) = base_dir.canonicalize() {
+                if !canonical.starts_with(&base_canonical) {
+                    eprintln!("Warning: skipping path that escapes base dir: {}", path_str);
+                    continue;
                 }
             }
 
