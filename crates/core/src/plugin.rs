@@ -495,4 +495,695 @@ mod tests {
         // When degraded to bones, full file content should not appear in output
         assert!(!output.contains("<content>"));
     }
+
+    // -------------------------------------------------------------------------
+    // Helper: create a temp file with a given extension
+    // -------------------------------------------------------------------------
+    fn make_temp_file(dir: &tempfile::TempDir, filename: &str, content: &str) -> PathBuf {
+        let file_path = dir.path().join(filename);
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        file_path
+    }
+
+    // =========================================================================
+    // XML output correctness
+    // =========================================================================
+
+    /// Symbol names with XML special characters should be escaped in XML output.
+    /// This test describes CORRECT behavior. The current implementation does NOT
+    /// escape these characters in <signature> tags — so this test is expected to
+    /// FAIL until the implementation is fixed.
+    #[test]
+    fn test_xml_signature_special_chars_are_escaped() {
+        use crate::cache::CacheStore;
+
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        // Insert a file + symbol with XML-dangerous characters in the name.
+        let file_id = cache.upsert_file("bad.rs", "h1", b"fn bad() {}").unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO symbols (id, file_id, name, kind, byte_offset, byte_length) \
+                 VALUES ('s1', ?1, '<script>&\"test\"</script>', 'function', 0, 11)",
+                rusqlite::params![file_id],
+            )
+            .unwrap();
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = make_temp_file(&dir, "bad.rs", "fn bad() {}\n");
+
+        let packer = Packer::new(
+            cache,
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,  // no_file_summary
+            false,  // no_files
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        // The raw unescaped characters must NOT appear outside of CDATA in XML attributes/tags.
+        // Correct output would use &lt; &gt; &amp; &quot; instead.
+        assert!(
+            !output.contains("<script>"),
+            "Bare <script> tag should not appear in XML output; expected escaped form"
+        );
+        assert!(
+            output.contains("&lt;script&gt;") || output.contains("&amp;"),
+            "XML special characters in symbol names must be escaped"
+        );
+    }
+
+    /// File paths with XML special characters should be escaped in path attributes.
+    /// This test describes CORRECT behavior and is expected to FAIL until fixed.
+    #[test]
+    fn test_xml_path_attribute_special_chars_are_escaped() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Use a filename that contains an ampersand (legal on most filesystems).
+        let file_path = make_temp_file(&dir, "a&b.txt", "hello world\n");
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        // The bare & must be escaped as &amp; in XML attributes.
+        assert!(
+            !output.contains("path=\"") || !output.contains("a&b.txt\""),
+            "Bare & in path attribute must be escaped as &amp;"
+        );
+    }
+
+    /// File content containing `]]>` inside a CDATA section must be escaped so
+    /// the XML document stays well-formed.
+    #[test]
+    fn test_xml_cdata_cdata_end_sequence_is_escaped() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Content that would prematurely close a CDATA section.
+        let tricky = "let s = \"]]>\";\n";
+        let file_path = make_temp_file(&dir, "tricky.txt", tricky);
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        // The raw ]]> sequence must not appear verbatim inside a CDATA section.
+        // The implementation splits it as ]]]]><![CDATA[>.
+        // After the transformation there should be no bare ]]> that closes CDATA prematurely.
+        // A simple check: every ]]> in the output must be followed immediately by </content>
+        // (i.e., it is the legitimate CDATA close).
+        let positions: Vec<_> = output.match_indices("]]>").collect();
+        for (idx, _) in &positions {
+            let after = &output[idx + 3..];
+            assert!(
+                after.starts_with("</content>"),
+                "Found ]]> at position {} that is not the CDATA closing sequence; \
+                 raw content may break XML well-formedness",
+                idx
+            );
+        }
+    }
+
+    /// A basic well-formedness check: the XML output should have balanced
+    /// `<repository>` / `</repository>` tags and no bare `<` or `>` outside CDATA.
+    #[test]
+    fn test_xml_output_basic_well_formedness() {
+        let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        assert!(
+            output.starts_with("<repository>"),
+            "XML output must start with <repository>"
+        );
+        assert!(
+            output.trim_end().ends_with("</repository>"),
+            "XML output must end with </repository>"
+        );
+
+        // Strip all CDATA sections before checking for bare angle brackets.
+        let cdata_re = regex::Regex::new(r"(?s)<!\[CDATA\[.*?]]>").unwrap();
+        let stripped = cdata_re.replace_all(&output, "");
+
+        // Any remaining < must be the start of a tag (followed by [/a-zA-Z!?])
+        for (i, ch) in stripped.char_indices() {
+            if ch == '<' {
+                let next = stripped[i + 1..].chars().next();
+                assert!(
+                    matches!(next, Some('/' | '!' | '?' | 'a'..='z' | 'A'..='Z')),
+                    "Bare < found at position {} outside of CDATA: ...{}...",
+                    i,
+                    &stripped[i.saturating_sub(10)..std::cmp::min(i + 20, stripped.len())]
+                );
+            }
+        }
+    }
+
+    // =========================================================================
+    // Markdown output correctness
+    // =========================================================================
+
+    /// Markdown skeleton map must indent symbol entries with two spaces under
+    /// their parent file bullet.
+    #[test]
+    fn test_markdown_skeleton_map_indentation() {
+        use crate::cache::CacheStore;
+
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = make_temp_file(&dir, "lib.rs", "fn alpha() {}\n");
+
+        let file_id = cache
+            .upsert_file(
+                file_path.to_string_lossy().as_ref(),
+                "h2",
+                b"fn alpha() {}",
+            )
+            .unwrap();
+        cache
+            .conn
+            .execute(
+                "INSERT INTO symbols (id, file_id, name, kind, byte_offset, byte_length) \
+                 VALUES ('s_alpha', ?1, 'alpha', 'function', 0, 13)",
+                rusqlite::params![file_id],
+            )
+            .unwrap();
+
+        let packer = Packer::new(
+            cache,
+            Parser {},
+            OutputFormat::Markdown,
+            None,
+            false,
+            true, // no_files — only generate skeleton map
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        // The file should appear as a bullet: "- <path>"
+        assert!(output.contains("- "), "File bullet not found in Markdown output");
+
+        // Each symbol under the file should be indented with two spaces: "  - kind name"
+        assert!(
+            output.contains("  - function alpha"),
+            "Symbol entries in skeleton map must be indented with two spaces; got:\n{}",
+            output
+        );
+    }
+
+    /// Markdown symbol names containing *, _, [, ], ` should appear verbatim and
+    /// must not break the overall Markdown skeleton structure (file bullet is still present).
+    #[test]
+    fn test_markdown_symbol_names_with_special_chars() {
+        use crate::cache::CacheStore;
+
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = make_temp_file(&dir, "weird.rs", "fn weird() {}\n");
+
+        let file_id = cache
+            .upsert_file(
+                file_path.to_string_lossy().as_ref(),
+                "h3",
+                b"fn weird() {}",
+            )
+            .unwrap();
+        // Symbol name with markdown special characters
+        cache
+            .conn
+            .execute(
+                "INSERT INTO symbols (id, file_id, name, kind, byte_offset, byte_length) \
+                 VALUES ('s_weird', ?1, '*_[weird`_]*', 'function', 0, 13)",
+                rusqlite::params![file_id],
+            )
+            .unwrap();
+
+        let packer = Packer::new(
+            cache,
+            Parser {},
+            OutputFormat::Markdown,
+            None,
+            false,
+            true, // no_files
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        // The file bullet must still be present — structure is intact.
+        assert!(output.contains("- "), "File bullet disappeared");
+
+        // The weird symbol name should appear verbatim in the output.
+        assert!(
+            output.contains("*_[weird`_]*"),
+            "Symbol name with Markdown special chars should appear verbatim"
+        );
+    }
+
+    // =========================================================================
+    // Token governor
+    // =========================================================================
+
+    /// With a generous budget, all file content should be included.
+    #[test]
+    fn test_token_governor_generous_budget_includes_content() {
+        let (_dir, file_path) = make_temp_rs_file("fn main() { let x = 42; }\n");
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            Some(100_000), // very large budget
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        // Content block should be present.
+        assert!(
+            output.contains("<content><![CDATA["),
+            "Expected <content> block when budget is generous; got:\n{}",
+            output
+        );
+    }
+
+    /// With a budget of 1 token, content must be omitted (only skeleton map output).
+    #[test]
+    fn test_token_governor_one_token_budget_omits_content() {
+        let (_dir, file_path) = make_temp_rs_file("fn main() { let x = 42; }\n");
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            Some(1), // impossibly tight budget
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let result = packer.pack(&[file_path]);
+
+        // Must not panic or error.
+        assert!(result.is_ok(), "pack() must not error under tight budget");
+        let output = result.unwrap();
+
+        // No file content should be present.
+        assert!(
+            !output.contains("<content>"),
+            "No <content> block expected when budget is 1 token"
+        );
+    }
+
+    /// Degradation due to token exhaustion must be graceful — no panic, no Err.
+    #[test]
+    fn test_token_governor_graceful_degradation_no_panic() {
+        let (_dir, file_path) = make_temp_rs_file(
+            "fn a() { 1 }\nfn b() { 2 }\nfn c() { 3 }\nfn d() { 4 }\n",
+        );
+
+        for budget in [0usize, 1, 5, 50] {
+            let packer = Packer::new(
+                SqliteCache::new_in_memory().unwrap(),
+                Parser {},
+                OutputFormat::Xml,
+                Some(budget),
+                false,
+                false,
+                false,
+                false,
+                false,
+            );
+            let result = packer.pack(&[file_path.clone()]);
+            assert!(
+                result.is_ok(),
+                "pack() panicked or errored at max_tokens={}",
+                budget
+            );
+        }
+    }
+
+    // =========================================================================
+    // Flag combinations
+    // =========================================================================
+
+    /// no_files=true AND no_file_summary=true together — the output should be
+    /// minimal: just the opening/closing repository tags and nothing else.
+    #[test]
+    fn test_no_files_and_no_file_summary_together() {
+        let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            true, // no_file_summary
+            true, // no_files
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        // Only the repository wrapper should be present.
+        let trimmed = output.trim();
+        assert_eq!(
+            trimmed, "<repository>\n</repository>",
+            "With both no_files and no_file_summary, output should be just the repository tags; got:\n{}",
+            trimmed
+        );
+    }
+
+    /// remove_comments=true should strip `//` line comments from Rust source.
+    #[test]
+    fn test_remove_line_comments_from_rust() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Use .txt so the parser falls back to raw content (no body elision complicates things).
+        let file_path = make_temp_file(
+            &dir,
+            "comments.txt",
+            "let x = 1; // this is a comment\nlet y = 2;\n",
+        );
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            true, // remove_comments
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        assert!(
+            !output.contains("// this is a comment"),
+            "Line comment should be stripped; got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("let x = 1;"),
+            "Non-comment code should remain after stripping line comments"
+        );
+    }
+
+    /// remove_comments=true should strip `/* */` block comments.
+    #[test]
+    fn test_remove_block_comments() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = make_temp_file(
+            &dir,
+            "block_comments.txt",
+            "int x = /* inline block */ 42;\n/* multi\nline\ncomment */\nint y = 1;\n",
+        );
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            true, // remove_comments
+            false,
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        assert!(
+            !output.contains("inline block"),
+            "Inline block comment should be stripped"
+        );
+        assert!(
+            !output.contains("multi\nline\ncomment"),
+            "Multi-line block comment should be stripped"
+        );
+        assert!(
+            output.contains("int x ="),
+            "Code outside block comment should be preserved"
+        );
+    }
+
+    /// remove_empty_lines=true should collapse multiple consecutive blank lines
+    /// into a single newline.
+    #[test]
+    fn test_remove_empty_lines_collapses_blanks() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = make_temp_file(
+            &dir,
+            "blanks.txt",
+            "line one\n\n\n\nline two\n\n\nline three\n",
+        );
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            true, // remove_empty_lines
+            false,
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        // There must be no run of more than one blank line in the content.
+        assert!(
+            !output.contains("\n\n\n"),
+            "Multiple consecutive blank lines should be collapsed to a single newline; got:\n{}",
+            output
+        );
+        assert!(
+            output.contains("line one"),
+            "Non-blank lines must be preserved"
+        );
+        assert!(
+            output.contains("line two"),
+            "Non-blank lines must be preserved"
+        );
+    }
+
+    /// truncate_base64=true should replace strings of 100+ alphanumeric chars
+    /// with the placeholder `[TRUNCATED_BASE64]`.
+    #[test]
+    fn test_truncate_base64_replaces_long_strings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Exactly 100 alphanumeric chars — the boundary that SHOULD be truncated.
+        let long_token = "A".repeat(100);
+        let content = format!("key = {}\n", long_token);
+        let file_path = make_temp_file(&dir, "tokens.txt", &content);
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            true, // truncate_base64
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        assert!(
+            output.contains("[TRUNCATED_BASE64]"),
+            "A 100-char alphanumeric string should be replaced with [TRUNCATED_BASE64]"
+        );
+        assert!(
+            !output.contains(&long_token),
+            "The original long token must not appear in output after truncation"
+        );
+    }
+
+    /// truncate_base64=true must NOT truncate strings of 99 characters or fewer.
+    #[test]
+    fn test_truncate_base64_preserves_short_strings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // 99 alphanumeric chars — one below the truncation threshold.
+        let short_token = "B".repeat(99);
+        let content = format!("key = {}\n", short_token);
+        let file_path = make_temp_file(&dir, "short_tokens.txt", &content);
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            true, // truncate_base64
+        );
+        let output = packer.pack(&[file_path]).unwrap();
+
+        assert!(
+            output.contains(&short_token),
+            "A 99-char string must NOT be truncated"
+        );
+        assert!(
+            !output.contains("[TRUNCATED_BASE64]"),
+            "No truncation should occur for strings under 100 chars"
+        );
+    }
+
+    // =========================================================================
+    // Multiple files
+    // =========================================================================
+
+    /// Packer with 3 files: all three must appear in the skeleton map.
+    #[test]
+    fn test_three_files_all_appear_in_skeleton_map() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let f1 = make_temp_file(&dir, "one.txt", "content one\n");
+        let f2 = make_temp_file(&dir, "two.txt", "content two\n");
+        let f3 = make_temp_file(&dir, "three.txt", "content three\n");
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[f1, f2, f3]).unwrap();
+
+        assert!(output.contains("one.txt"), "one.txt missing from output");
+        assert!(output.contains("two.txt"), "two.txt missing from output");
+        assert!(output.contains("three.txt"), "three.txt missing from output");
+    }
+
+    /// Files must appear in the skeleton map in the same order they were supplied
+    /// to pack() — i.e., the ordering is deterministic.
+    #[test]
+    fn test_skeleton_map_preserves_input_order() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let f1 = make_temp_file(&dir, "alpha.txt", "alpha\n");
+        let f2 = make_temp_file(&dir, "beta.txt", "beta\n");
+        let f3 = make_temp_file(&dir, "gamma.txt", "gamma\n");
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let output = packer.pack(&[f1, f2, f3]).unwrap();
+
+        let pos_alpha = output.find("alpha.txt").expect("alpha.txt not found");
+        let pos_beta = output.find("beta.txt").expect("beta.txt not found");
+        let pos_gamma = output.find("gamma.txt").expect("gamma.txt not found");
+
+        assert!(
+            pos_alpha < pos_beta && pos_beta < pos_gamma,
+            "Files must appear in the skeleton map in the order they were supplied"
+        );
+    }
+
+    // =========================================================================
+    // Binary / missing files
+    // =========================================================================
+
+    /// A file that exists when pack() starts being called but has been deleted
+    /// before its content is read should be gracefully skipped — no panic, no Err,
+    /// just a warning on stderr.
+    #[test]
+    fn test_deleted_file_is_gracefully_skipped() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = make_temp_file(&dir, "ephemeral.txt", "will be deleted\n");
+
+        // Delete the file before calling pack().
+        std::fs::remove_file(&file_path).unwrap();
+
+        let packer = Packer::new(
+            SqliteCache::new_in_memory().unwrap(),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        let result = packer.pack(&[file_path]);
+
+        assert!(
+            result.is_ok(),
+            "pack() must not return Err when a file has been deleted; got: {:?}",
+            result.err()
+        );
+
+        let output = result.unwrap();
+        // The output should still be a well-formed XML document.
+        assert!(output.contains("<repository>"), "Output must start with <repository>");
+        assert!(
+            output.trim_end().ends_with("</repository>"),
+            "Output must end with </repository>"
+        );
+        // No content should be emitted for the missing file.
+        assert!(
+            !output.contains("will be deleted"),
+            "Content of deleted file must not appear in output"
+        );
+    }
 }

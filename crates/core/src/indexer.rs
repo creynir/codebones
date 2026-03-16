@@ -343,4 +343,352 @@ mod tests {
             "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
         );
     }
+
+    // --- Secret file exclusion ---
+
+    #[test]
+    fn test_excludes_dotenv_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join(".env"), "SECRET=hunter2").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n == ".env"),
+            ".env must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_id_rsa_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("id_rsa"), "-----BEGIN RSA PRIVATE KEY-----").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n == "id_rsa"),
+            "id_rsa must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_credentials_json_file() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("credentials.json"), r#"{"token":"secret"}"#).unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n == "credentials.json"),
+            "credentials.json must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_normal_rs_file_is_not_excluded() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("lib.rs"), "pub fn add(a: i32, b: i32) -> i32 { a + b }").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            names.iter().any(|n| n == "lib.rs"),
+            "lib.rs must be indexed, got: {:?}",
+            names
+        );
+    }
+
+    // --- Binary file exclusion ---
+
+    #[test]
+    fn test_excludes_exe_extension() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("app.exe"), "MZ fake windows binary").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n.ends_with(".exe")),
+            ".exe must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_png_extension() {
+        let dir = setup_workspace();
+        let root = dir.path();
+        // PNG magic bytes header to make it realistic, but content doesn't matter
+        fs::write(root.join("logo.png"), b"\x89PNG\r\n\x1a\nfake image data").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n.ends_with(".png")),
+            ".png must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_excludes_source_file_with_null_bytes() {
+        // A file with a .rs extension but containing null bytes should be treated
+        // as binary and skipped. This catches embedded binaries misnamed as source.
+        let dir = setup_workspace();
+        let root = dir.path();
+        let mut content = b"fn main() { println!(\"hello\"); }\n".to_vec();
+        content.push(0x00); // inject a null byte
+        content.extend_from_slice(b" // more code");
+        fs::write(root.join("tricky.rs"), &content).unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+        assert!(
+            !names.iter().any(|n| n == "tricky.rs"),
+            "Source file with null bytes must be excluded, got: {:?}",
+            names
+        );
+    }
+
+    // --- Glob filtering via ignore file ---
+
+    #[test]
+    fn test_codebonesignore_glob_excludes_toml_files() {
+        // Simulate "--ignore *.toml" by writing a .codebonesignore with a glob pattern
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("Cargo.toml"), "[package]\nname = \"test\"").unwrap();
+        fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join(".codebonesignore"), "*.toml\n").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+
+        assert!(
+            !names.iter().any(|n| n.ends_with(".toml")),
+            "*.toml files must be excluded via .codebonesignore, got: {:?}",
+            names
+        );
+        assert!(
+            names.iter().any(|n| n == "main.rs"),
+            "main.rs must still be indexed, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_gitignore_glob_excludes_matching_files() {
+        // Simulate "--ignore *.log" by writing a .gitignore with a glob pattern
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("app.log"), "INFO: server started").unwrap();
+        fs::write(root.join("server.rs"), "fn serve() {}").unwrap();
+        fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+
+        assert!(
+            !names.iter().any(|n| n.ends_with(".log")),
+            "*.log files must be excluded via .gitignore, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn test_only_rs_files_indexed_when_all_others_ignored() {
+        // Simulate "--include *.rs only" by ignoring everything else via .codebonesignore
+        let dir = setup_workspace();
+        let root = dir.path();
+        fs::write(root.join("main.rs"), "fn main() {}").unwrap();
+        fs::write(root.join("readme.md"), "# Project").unwrap();
+        fs::write(root.join("config.yaml"), "key: value").unwrap();
+        // Use .codebonesignore to exclude non-Rust files
+        fs::write(root.join(".codebonesignore"), "*.md\n*.yaml\n").unwrap();
+
+        let indexer = DefaultIndexer;
+        let results = indexer.index(root, &IndexerOptions::default()).unwrap();
+        let names: Vec<_> = results.iter().map(|r| r.path.to_string_lossy().to_string()).collect();
+
+        for name in &names {
+            assert!(
+                name.ends_with(".rs"),
+                "Only .rs files should be indexed, but found: {}",
+                name
+            );
+        }
+        assert!(
+            names.iter().any(|n| n == "main.rs"),
+            "main.rs must be in results"
+        );
+    }
+
+    // --- Path traversal security test ---
+
+    #[test]
+    fn test_path_traversal_outside_root_is_rejected_or_absent() {
+        // Create a workspace root and a separate directory outside it.
+        // Attempt to index a path that canonically lives outside the root.
+        // The indexer must either return an error or produce no results
+        // referencing paths outside the workspace root.
+        let workspace = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+
+        // Write a file in the workspace
+        fs::write(workspace.path().join("inside.txt"), "safe content").unwrap();
+
+        // Write a file outside the workspace
+        fs::write(outside.path().join("outside.txt"), "secret content").unwrap();
+
+        // Attempt to index using a symlink that escapes the workspace root
+        // (only possible on Unix; on Windows the symlink call is a no-op and we
+        // just verify the walker doesn't traverse outside on its own)
+        #[cfg(unix)]
+        {
+            let link_path = workspace.path().join("escape_link");
+            std::os::unix::fs::symlink(outside.path().join("outside.txt"), &link_path).unwrap();
+
+            let indexer = DefaultIndexer;
+            // With follow_symlinks=false (default) the symlink is either skipped
+            // (Ok with no escaping entry) or rejected outright (Err PathTraversal).
+            // Both are correct — the escaping file must never appear in results.
+            let result = indexer.index(workspace.path(), &IndexerOptions::default());
+            let files = match result {
+                Ok(f) => f,
+                Err(IndexerError::PathTraversal(_)) | Err(IndexerError::SymlinkEscape(_)) => {
+                    vec![] // rejected at the gate — correct behaviour
+                }
+                Err(e) => panic!("Unexpected error with follow_symlinks=false: {}", e),
+            };
+
+            let outside_root = outside.path();
+            for fh in &files {
+                let absolute = workspace.path().join(&fh.path);
+                assert!(
+                    absolute.starts_with(workspace.path()),
+                    "Traversal detected: {:?} is outside {:?}",
+                    absolute,
+                    workspace.path()
+                );
+                assert_ne!(
+                    fh.path.to_string_lossy().as_ref(),
+                    "escape_link",
+                    "Symlink pointing outside root must not be indexed"
+                );
+                let _ = outside_root;
+            }
+        }
+
+        // When follow_symlinks=true, the indexer is expected to return an error
+        // for paths that escape the workspace root.
+        #[cfg(unix)]
+        {
+            let link_path2 = workspace.path().join("escape_link2");
+            // Only create if it doesn't already exist (test may run twice in parallel)
+            if !link_path2.exists() {
+                std::os::unix::fs::symlink(outside.path().join("outside.txt"), &link_path2)
+                    .unwrap();
+            }
+            let indexer = DefaultIndexer;
+            let options = IndexerOptions {
+                follow_symlinks: true,
+                ..Default::default()
+            };
+            let result = indexer.index(workspace.path(), &options);
+            // Must either be an error (PathTraversal/SymlinkEscape) or not include
+            // files that canonically live outside the workspace.
+            match result {
+                Err(IndexerError::PathTraversal(_)) | Err(IndexerError::SymlinkEscape(_)) => {
+                    // Correct: traversal detected and rejected
+                }
+                Ok(files) => {
+                    for fh in &files {
+                        let absolute = workspace.path().join(&fh.path);
+                        assert!(
+                            absolute.starts_with(workspace.path()),
+                            "Returned file escapes workspace: {:?}",
+                            absolute
+                        );
+                    }
+                }
+                Err(other) => panic!("Unexpected error: {}", other),
+            }
+        }
+    }
+
+    // --- Incremental indexing ---
+
+    #[test]
+    fn test_incremental_indexing_only_changed_file_has_new_hash() {
+        use std::collections::HashMap;
+
+        let dir = setup_workspace();
+        let root = dir.path();
+
+        // Write two files
+        fs::write(root.join("stable.rs"), "fn stable() {}").unwrap();
+        fs::write(root.join("volatile.rs"), "fn original() {}").unwrap();
+
+        let indexer = DefaultIndexer;
+        let options = IndexerOptions {
+            respect_gitignore: false,
+            ..Default::default()
+        };
+
+        // First index pass: record all hashes
+        let first_results = indexer.index(root, &options).unwrap();
+        let first_hashes: HashMap<String, String> = first_results
+            .iter()
+            .map(|fh| (fh.path.to_string_lossy().to_string(), fh.hash.clone()))
+            .collect();
+
+        assert!(
+            first_hashes.contains_key("stable.rs"),
+            "stable.rs must be in first index"
+        );
+        assert!(
+            first_hashes.contains_key("volatile.rs"),
+            "volatile.rs must be in first index"
+        );
+
+        // Modify only volatile.rs
+        fs::write(root.join("volatile.rs"), "fn modified() {}").unwrap();
+
+        // Second index pass
+        let second_results = indexer.index(root, &options).unwrap();
+        let second_hashes: HashMap<String, String> = second_results
+            .iter()
+            .map(|fh| (fh.path.to_string_lossy().to_string(), fh.hash.clone()))
+            .collect();
+
+        // stable.rs hash must be unchanged
+        assert_eq!(
+            first_hashes["stable.rs"], second_hashes["stable.rs"],
+            "stable.rs hash must not change between index passes"
+        );
+
+        // volatile.rs hash must have changed
+        assert_ne!(
+            first_hashes["volatile.rs"], second_hashes["volatile.rs"],
+            "volatile.rs hash must change after file modification"
+        );
+    }
 }

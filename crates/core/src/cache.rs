@@ -293,4 +293,350 @@ mod tests {
 
         assert_eq!(count, 0);
     }
+
+    // --- Symbol name edge cases ---
+
+    #[test]
+    fn test_symbol_name_with_single_quote_roundtrips() {
+        // SQL injection defense: a name containing a single quote must survive
+        // the parameterized INSERT and come back intact.
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let file_id = cache
+            .upsert_file("src/q.rs", "hq1", b"fn it's() {}")
+            .unwrap();
+
+        let name = "it's a function".to_string();
+        let symbol = Symbol {
+            id: "sym_sq".to_string(),
+            file_id,
+            name: name.clone(),
+            kind: "function".to_string(),
+            byte_offset: 0,
+            byte_length: 12,
+        };
+        cache.insert_symbol(&symbol).unwrap();
+
+        let symbols = cache.get_file_symbols("src/q.rs").unwrap();
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].1, name);
+    }
+
+    #[test]
+    fn test_symbol_name_with_double_quote_roundtrips() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let file_id = cache
+            .upsert_file("src/dq.rs", "hdq1", b"fn main() {}")
+            .unwrap();
+
+        let name = r#"say "hello" world"#.to_string();
+        let symbol = Symbol {
+            id: "sym_dq".to_string(),
+            file_id,
+            name: name.clone(),
+            kind: "function".to_string(),
+            byte_offset: 0,
+            byte_length: 12,
+        };
+        cache.insert_symbol(&symbol).unwrap();
+
+        let symbols = cache.get_file_symbols("src/dq.rs").unwrap();
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].1, name);
+    }
+
+    #[test]
+    fn test_symbol_name_empty_string_does_not_panic() {
+        // The schema has no NOT NULL constraint on name beyond TEXT, so an empty
+        // string should be stored gracefully. We accept either success or a
+        // well-typed rusqlite error — the key invariant is no panic.
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let file_id = cache
+            .upsert_file("src/empty.rs", "hempty", b"")
+            .unwrap();
+
+        let symbol = Symbol {
+            id: "sym_empty_name".to_string(),
+            file_id,
+            name: "".to_string(),
+            kind: "function".to_string(),
+            byte_offset: 0,
+            byte_length: 0,
+        };
+        let result = cache.insert_symbol(&symbol);
+        // Must not panic; an empty name stored successfully is also acceptable.
+        match result {
+            Ok(()) => {
+                let symbols = cache.get_file_symbols("src/empty.rs").unwrap();
+                assert_eq!(symbols[0].1, "");
+            }
+            Err(_) => {} // Graceful rejection is also fine
+        }
+    }
+
+    #[test]
+    fn test_symbol_name_very_long_no_truncation() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let long_name: String = "a".repeat(1000);
+        let content = vec![b'x'; 1000];
+        let file_id = cache
+            .upsert_file("src/long.rs", "hlong", &content)
+            .unwrap();
+
+        let symbol = Symbol {
+            id: "sym_long_name".to_string(),
+            file_id,
+            name: long_name.clone(),
+            kind: "function".to_string(),
+            byte_offset: 0,
+            byte_length: 1000,
+        };
+        cache.insert_symbol(&symbol).unwrap();
+
+        let symbols = cache.get_file_symbols("src/long.rs").unwrap();
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].1.len(), 1000);
+        assert_eq!(symbols[0].1, long_name);
+    }
+
+    #[test]
+    fn test_symbol_name_with_newlines_and_tabs_roundtrips() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let file_id = cache
+            .upsert_file("src/ws.rs", "hws", b"fn foo() {}")
+            .unwrap();
+
+        let name = "line1\nline2\ttabbed".to_string();
+        let symbol = Symbol {
+            id: "sym_whitespace".to_string(),
+            file_id,
+            name: name.clone(),
+            kind: "function".to_string(),
+            byte_offset: 0,
+            byte_length: 11,
+        };
+        cache.insert_symbol(&symbol).unwrap();
+
+        let symbols = cache.get_file_symbols("src/ws.rs").unwrap();
+        assert_eq!(symbols.len(), 1);
+        assert_eq!(symbols[0].1, name);
+    }
+
+    // --- File content edge cases ---
+
+    #[test]
+    fn test_file_content_with_unicode_and_emoji_roundtrips() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let content = "🦀 Rust 中文 العربية".as_bytes().to_vec();
+        let file_id = cache
+            .upsert_file("src/unicode.rs", "hunicode", &content)
+            .unwrap();
+
+        // Retrieve via symbol content spanning the whole file
+        let sym = Symbol {
+            id: "sym_unicode_all".to_string(),
+            file_id,
+            name: "unicode_fn".to_string(),
+            kind: "function".to_string(),
+            byte_offset: 0,
+            byte_length: content.len(),
+        };
+        cache.insert_symbol(&sym).unwrap();
+
+        let retrieved = cache.get_symbol_content("sym_unicode_all").unwrap();
+        assert_eq!(retrieved, Some(content));
+    }
+
+    #[test]
+    fn test_file_path_with_spaces_and_special_chars() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let path = "src/my project/file (v2) [draft].rs";
+        let id = cache
+            .upsert_file(path, "hspecial", b"fn x() {}")
+            .unwrap();
+        assert!(id > 0);
+
+        let hash = cache.get_file_hash(path).unwrap();
+        assert_eq!(hash, Some("hspecial".to_string()));
+    }
+
+    #[test]
+    fn test_upsert_file_twice_returns_updated_content() {
+        // Re-inserting the same path with new content must return the latest
+        // content, not the stale original.
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let path = "src/changed.rs";
+        let original = b"fn original() {}";
+        let updated = b"fn updated() {}";
+
+        let id1 = cache.upsert_file(path, "h_original", original).unwrap();
+        let id2 = cache.upsert_file(path, "h_updated", updated).unwrap();
+
+        // Same row, same id
+        assert_eq!(id1, id2);
+
+        // Hash must reflect the update
+        let hash = cache.get_file_hash(path).unwrap();
+        assert_eq!(hash, Some("h_updated".to_string()));
+
+        // Verify content via a symbol covering the full updated file
+        let sym = Symbol {
+            id: "sym_changed".to_string(),
+            file_id: id2,
+            name: "updated".to_string(),
+            kind: "function".to_string(),
+            byte_offset: 0,
+            byte_length: updated.len(),
+        };
+        cache.insert_symbol(&sym).unwrap();
+        let retrieved = cache.get_symbol_content("sym_changed").unwrap();
+        assert_eq!(retrieved, Some(updated.to_vec()));
+    }
+
+    // --- Lookup correctness ---
+
+    #[test]
+    fn test_get_file_hash_nonexistent_returns_none_not_error() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let result = cache.get_file_hash("/nonexistent/path/that/does/not/exist.rs");
+        assert!(
+            matches!(result, Ok(None)),
+            "Expected Ok(None), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_get_symbol_content_nonexistent_returns_none_not_error() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let result = cache.get_symbol_content("sym_id_that_does_not_exist");
+        assert!(
+            matches!(result, Ok(None)),
+            "Expected Ok(None), got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_delete_file_also_removes_its_symbols() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let file_id = cache
+            .upsert_file("src/doomed.rs", "hdoomed", b"fn doomed() {}")
+            .unwrap();
+
+        for i in 0..3 {
+            let sym = Symbol {
+                id: format!("sym_doomed_{i}"),
+                file_id,
+                name: format!("doomed_{i}"),
+                kind: "function".to_string(),
+                byte_offset: i * 5,
+                byte_length: 5,
+            };
+            cache.insert_symbol(&sym).unwrap();
+        }
+
+        // Confirm symbols exist before deletion
+        let before = cache.get_file_symbols("src/doomed.rs").unwrap();
+        assert_eq!(before.len(), 3);
+
+        cache.delete_file("src/doomed.rs").unwrap();
+
+        // get_file_symbols should now return empty vec (file is gone)
+        let after = cache.get_file_symbols("src/doomed.rs").unwrap();
+        assert!(after.is_empty(), "Expected no symbols after file deletion");
+
+        // Double-check via direct count
+        let mut stmt = cache
+            .conn
+            .prepare("SELECT COUNT(*) FROM symbols WHERE file_id = ?")
+            .unwrap();
+        let count: i64 = stmt.query_row([file_id], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0);
+    }
+
+    // --- Database state ---
+
+    #[test]
+    fn test_new_database_creates_schema_correctly() {
+        // A fresh on-disk database (no tables yet) should have its schema
+        // initialized by SqliteCache::new + init() without error.
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("fresh.db");
+        let path_str = db_path.to_str().unwrap();
+
+        let cache = SqliteCache::new(path_str).unwrap();
+        cache.init().unwrap();
+
+        let mut stmt = cache
+            .conn
+            .prepare(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('files', 'symbols')",
+            )
+            .unwrap();
+        let tables: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert!(tables.contains(&"files".to_string()));
+        assert!(tables.contains(&"symbols".to_string()));
+    }
+
+    #[test]
+    fn test_two_consecutive_opens_on_same_db_path_do_not_corrupt() {
+        // Opening a database twice (sequentially) and calling init() both times
+        // must not corrupt existing data or return an error.
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let db_path = dir.path().join("shared.db");
+        let path_str = db_path.to_str().unwrap();
+
+        // First open: create schema and insert data
+        {
+            let cache = SqliteCache::new(path_str).unwrap();
+            cache.init().unwrap();
+            cache
+                .upsert_file("src/lib.rs", "hash_first_open", b"fn lib() {}")
+                .unwrap();
+        }
+
+        // Second open: init() again (idempotent via IF NOT EXISTS), then read back
+        {
+            let cache = SqliteCache::new(path_str).unwrap();
+            cache.init().unwrap(); // Must not drop existing tables or error
+
+            let hash = cache.get_file_hash("src/lib.rs").unwrap();
+            assert_eq!(
+                hash,
+                Some("hash_first_open".to_string()),
+                "Data inserted in first open should survive second open"
+            );
+        }
+    }
 }
