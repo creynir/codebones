@@ -175,20 +175,11 @@ impl Packer {
         let re_block_comment = regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap();
 
         for path in file_paths {
-            let mut raw_content = if path.to_string_lossy() == "test.rs" {
-                "dummy content".to_string()
-            } else {
-                match std::fs::read_to_string(path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        // Skip unreadable files gracefully (e.g. they were deleted since indexing)
-                        eprintln!(
-                            "Warning: skipping unreadable file {}: {}",
-                            path.display(),
-                            e
-                        );
-                        continue;
-                    }
+            let mut raw_content = match std::fs::read_to_string(path) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Warning: skipping unreadable file {}: {}", path.display(), e);
+                    continue;
                 }
             };
 
@@ -327,6 +318,7 @@ impl Packer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     struct MockPlugin;
 
@@ -348,17 +340,26 @@ mod tests {
         }
     }
 
+    fn make_temp_rs_file(content: &str) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let file_path = dir.path().join("sample.rs");
+        let mut f = std::fs::File::create(&file_path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        (dir, file_path)
+    }
+
     #[test]
     fn test_plugin_detect_and_enrich() {
         let plugin = MockPlugin;
         assert!(plugin.detect(Path::new(".")));
         let mut bones = vec![Bone::default()];
-        plugin.enrich(Path::new("test.rs"), &mut bones).unwrap();
+        plugin.enrich(Path::new("any_file.rs"), &mut bones).unwrap();
         assert_eq!(bones[0].metadata.get("injected").unwrap(), "true");
     }
 
     #[test]
     fn test_packer_xml_format() {
+        let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
         let packer = Packer::new(
             SqliteCache::new_in_memory().unwrap(),
             Parser {},
@@ -370,7 +371,7 @@ mod tests {
             false,
             false,
         );
-        let result = packer.pack(&[PathBuf::from("test.rs")]);
+        let result = packer.pack(&[file_path]);
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("<repository>"));
@@ -378,6 +379,7 @@ mod tests {
 
     #[test]
     fn test_packer_markdown_format() {
+        let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
         let packer = Packer::new(
             SqliteCache::new_in_memory().unwrap(),
             Parser {},
@@ -389,14 +391,15 @@ mod tests {
             false,
             false,
         );
-        let result = packer.pack(&[PathBuf::from("test.rs")]);
+        let result = packer.pack(&[file_path.clone()]);
         assert!(result.is_ok());
         let output = result.unwrap();
-        assert!(output.contains("## test.rs"));
+        assert!(output.contains(&format!("## {}", file_path.display())));
     }
 
     #[test]
     fn test_packer_with_plugins() {
+        let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
         let mut packer = Packer::new(
             SqliteCache::new_in_memory().unwrap(),
             Parser {},
@@ -409,7 +412,7 @@ mod tests {
             false,
         );
         packer.register_plugin(Box::new(MockPlugin));
-        let result = packer.pack(&[PathBuf::from("test.rs")]);
+        let result = packer.pack(&[file_path]);
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("injected"));
@@ -445,13 +448,14 @@ mod tests {
             false,
             false,
         );
-        let result = packer.pack(&[PathBuf::from("missing.rs")]);
-        // Missing files are now skipped gracefully
+        let result = packer.pack(&[PathBuf::from("this_file_does_not_exist_xyz.rs")]);
+        // Missing files are skipped gracefully
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_packer_generates_skeleton_map_at_top() {
+        let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
         let packer = Packer::new(
             SqliteCache::new_in_memory().unwrap(),
             Parser {},
@@ -463,7 +467,7 @@ mod tests {
             false,
             false,
         );
-        let result = packer.pack(&[PathBuf::from("test.rs")]);
+        let result = packer.pack(&[file_path]);
         assert!(result.is_ok());
         let output = result.unwrap();
         // The skeleton map should be at the top of the output
@@ -472,7 +476,8 @@ mod tests {
 
     #[test]
     fn test_packer_token_governor_degrades_to_bones() {
-        // Set a very low max_tokens to force degradation
+        // Set a very low max_tokens to force degradation to bones-only output
+        let (_dir, file_path) = make_temp_rs_file("fn main() { let x = 1; }\n");
         let packer = Packer::new(
             SqliteCache::new_in_memory().unwrap(),
             Parser {},
@@ -484,10 +489,10 @@ mod tests {
             false,
             false,
         );
-        let result = packer.pack(&[PathBuf::from("test.rs")]);
+        let result = packer.pack(&[file_path]);
         assert!(result.is_ok());
         let output = result.unwrap();
-        // It should not contain the full "dummy content"
-        assert!(!output.contains("dummy content"));
+        // When degraded to bones, full file content should not appear in output
+        assert!(!output.contains("<content>"));
     }
 }
