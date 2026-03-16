@@ -802,3 +802,57 @@ fn outline_returns_error_when_no_index_exists() {
     let result = api::outline(dir.path(), "missing.rs");
     assert!(result.is_err(), "outline without prior index should return an error");
 }
+
+#[test]
+fn pack_with_xml_special_chars_in_symbol_names() -> Result<(), Box<dyn std::error::Error>> {
+    // Rust identifiers cannot contain <>&, but FILE PATHS can on most filesystems.
+    // Write a fixture file and give it a name containing '&' so the path attribute
+    // in the XML output must be escaped as &amp;.
+    let dir = TempDir::new().expect("failed to create tempdir");
+
+    // Create a file whose name contains an ampersand (legal on Linux/macOS).
+    let file_name = "module&utils.rs";
+    let path = dir.path().join(file_name);
+    fs::write(&path, RUST_FIXTURE).expect("failed to write fixture file with & in name");
+
+    // Index and pack — no prior index() call required; pack() indexes on-the-fly via the packer.
+    let output = api::pack(dir.path(), "xml", None, default_pack_options())
+        .expect("pack should succeed even with & in file path");
+
+    // The output must not contain a bare & outside of XML entity references.
+    // Strip all well-formed XML entities first, then check no bare & remains.
+    //
+    // Well-formed XML entity references: &amp; &lt; &gt; &quot; &apos; &#NNN; &#xNNN;
+    // We replace those then assert no bare & is left.
+    let entities_stripped = output
+        .replace("&amp;", "AMP")
+        .replace("&lt;", "LT")
+        .replace("&gt;", "GT")
+        .replace("&quot;", "QUOT")
+        .replace("&apos;", "APOS");
+
+    // Any remaining & is unescaped — that is a malformed XML document.
+    assert!(
+        !entities_stripped.contains('&'),
+        "Bare & found in XML output after stripping well-formed entities. \
+         File path containing '&' must be escaped as &amp; in XML attributes; got:\n{}",
+        output
+    );
+
+    // Confirm the escaped form is present (the & from the filename must be &amp;).
+    assert!(
+        output.contains("&amp;"),
+        "Expected &amp; in XML output for a filename containing '&'; got:\n{}",
+        output
+    );
+
+    // The document envelope must be well-formed.
+    assert!(
+        output.contains("<repository>") && output.contains("</repository>"),
+        "XML output must have well-formed <repository> envelope; got:\n{}",
+        output
+    );
+
+    Ok(())
+}
+

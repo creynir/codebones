@@ -81,6 +81,8 @@ impl Indexer for DefaultIndexer {
 
         let walker = builder.build();
 
+        let canonical_root = std::fs::canonicalize(workspace_root)?;
+
         for result in walker {
             let entry = match result {
                 Ok(e) => e,
@@ -93,7 +95,6 @@ impl Indexer for DefaultIndexer {
             }
 
             // Path traversal check
-            let canonical_root = std::fs::canonicalize(workspace_root)?;
             let canonical_path = match std::fs::canonicalize(path) {
                 Ok(p) => p,
                 Err(_) => continue, // Skip broken symlinks or missing files
@@ -629,6 +630,51 @@ mod tests {
     }
 
     // --- Incremental indexing ---
+
+    #[test]
+    fn test_large_file_at_limit_is_indexed_small_file_over_limit_is_skipped() {
+        // The indexer uses `metadata.len() > max_file_size_bytes` (strict greater-than),
+        // so a file of exactly max_file_size_bytes is INCLUDED; one of max+1 is EXCLUDED.
+        let dir = setup_workspace();
+        let root = dir.path();
+
+        let max_size: u64 = 500 * 1024; // 512_000 bytes — the default limit
+
+        // File exactly AT the limit — should be indexed (not greater-than, so passes the check)
+        let at_limit_path = root.join("at_limit.txt");
+        let mut at_limit = File::create(&at_limit_path).unwrap();
+        at_limit.write_all(&vec![b'a'; max_size as usize]).unwrap();
+
+        // File one byte OVER the limit — should be skipped
+        let over_limit_path = root.join("over_limit.txt");
+        let mut over_limit = File::create(&over_limit_path).unwrap();
+        over_limit.write_all(&vec![b'b'; max_size as usize + 1]).unwrap();
+
+        let indexer = DefaultIndexer;
+        let options = IndexerOptions {
+            max_file_size_bytes: max_size,
+            respect_gitignore: false,
+            ..Default::default()
+        };
+
+        let results = indexer.index(root, &options).unwrap();
+        let names: Vec<String> = results
+            .iter()
+            .map(|r| r.path.to_string_lossy().to_string())
+            .collect();
+
+        assert!(
+            names.iter().any(|n| n == "at_limit.txt"),
+            "File of exactly max_file_size_bytes should be indexed (boundary is exclusive); got: {:?}",
+            names
+        );
+
+        assert!(
+            !names.iter().any(|n| n == "over_limit.txt"),
+            "File of max_file_size_bytes + 1 should NOT be indexed; got: {:?}",
+            names
+        );
+    }
 
     #[test]
     fn test_incremental_indexing_only_changed_file_has_new_hash() {
