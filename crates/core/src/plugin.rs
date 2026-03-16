@@ -2,17 +2,13 @@ use crate::cache::{CacheStore, SqliteCache};
 use crate::parser::Bone;
 use crate::parser::Parser;
 use anyhow::Result;
-use once_cell::sync::Lazy;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
-static RE_EMPTY_LINES: Lazy<regex::Regex> =
-    Lazy::new(|| regex::Regex::new(r"\n\s*\n").unwrap());
-static RE_BASE64: Lazy<regex::Regex> =
-    Lazy::new(|| regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").unwrap());
-static RE_LINE_COMMENT: Lazy<regex::Regex> =
-    Lazy::new(|| regex::Regex::new(r"(?m)(//|#).*\n").unwrap());
-static RE_BLOCK_COMMENT: Lazy<regex::Regex> =
-    Lazy::new(|| regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap());
+static RE_EMPTY_LINES: OnceLock<regex::Regex> = OnceLock::new();
+static RE_BASE64: OnceLock<regex::Regex> = OnceLock::new();
+static RE_LINE_COMMENT: OnceLock<regex::Regex> = OnceLock::new();
+static RE_BLOCK_COMMENT: OnceLock<regex::Regex> = OnceLock::new();
 
 /// A plugin that can enrich extracted code bones with domain-specific metadata.
 pub trait ContextPlugin: Send + Sync {
@@ -175,12 +171,16 @@ impl Packer {
             };
 
             if self.remove_empty_lines {
-                raw_content = RE_EMPTY_LINES.replace_all(&raw_content, "\n").to_string();
+                raw_content = RE_EMPTY_LINES
+                    .get_or_init(|| regex::Regex::new(r"\n\s*\n").unwrap())
+                    .replace_all(&raw_content, "\n")
+                    .to_string();
             }
 
             if self.truncate_base64 {
                 // Truncate long hex or base64 looking strings (length > 100)
                 raw_content = RE_BASE64
+                    .get_or_init(|| regex::Regex::new(r"[A-Za-z0-9+/=]{100,}").unwrap())
                     .replace_all(&raw_content, "[TRUNCATED_BASE64]")
                     .to_string();
             }
@@ -193,10 +193,11 @@ impl Packer {
                     let mut result = String::new();
                     let mut last_end = 0;
 
-                    let mut sorted_symbols = doc.symbols.clone();
-                    sorted_symbols.sort_by_key(|s| s.full_range.start);
+                    let mut indices: Vec<usize> = (0..doc.symbols.len()).collect();
+                    indices.sort_by_key(|&i| doc.symbols[i].full_range.start);
 
-                    for sym in sorted_symbols {
+                    for i in &indices {
+                        let sym = &doc.symbols[*i];
                         if let Some(body_range) = &sym.body_range {
                             if body_range.start >= last_end {
                                 result.push_str(&raw_content[last_end..body_range.start]);
@@ -209,15 +210,31 @@ impl Packer {
 
                     if self.remove_comments {
                         // Simple regex fallback for comments (C-style, Python, HTML)
-                        result = RE_BLOCK_COMMENT.replace_all(&result, "").to_string();
-                        result = RE_LINE_COMMENT.replace_all(&result, "\n").to_string();
+                        result = RE_BLOCK_COMMENT
+                            .get_or_init(|| {
+                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap()
+                            })
+                            .replace_all(&result, "")
+                            .to_string();
+                        result = RE_LINE_COMMENT
+                            .get_or_init(|| regex::Regex::new(r"(?m)(//|#).*\n").unwrap())
+                            .replace_all(&result, "\n")
+                            .to_string();
                     }
 
                     result
                 } else {
                     if self.remove_comments {
-                        let no_blocks = RE_BLOCK_COMMENT.replace_all(&raw_content, "").to_string();
-                        RE_LINE_COMMENT.replace_all(&no_blocks, "\n").to_string()
+                        let no_blocks = RE_BLOCK_COMMENT
+                            .get_or_init(|| {
+                                regex::Regex::new(r"(?s)/\*.*?\*/|<!--.*?-->").unwrap()
+                            })
+                            .replace_all(&raw_content, "")
+                            .to_string();
+                        RE_LINE_COMMENT
+                            .get_or_init(|| regex::Regex::new(r"(?m)(//|#).*\n").unwrap())
+                            .replace_all(&no_blocks, "\n")
+                            .to_string()
                     } else {
                         raw_content.clone() // Fallback to raw content if language isn't supported
                     }
@@ -272,7 +289,8 @@ impl Packer {
                             for (k, v) in &bone.metadata {
                                 output.push_str(&format!(
                                     "      <metadata key=\"{}\">{}</metadata>\n",
-                                    k, v
+                                    Self::xml_escape(k),
+                                    Self::xml_escape(v)
                                 ));
                             }
                         }
@@ -1185,4 +1203,85 @@ mod tests {
             "Content of deleted file must not appear in output"
         );
     }
+
+    // =========================================================================
+    // Metadata XML injection (Amber team gap #1)
+    // =========================================================================
+
+    /// Plugin metadata keys and values containing XML-dangerous characters must be
+    /// escaped before being written into the <metadata> element.
+    ///
+    /// This test describes CORRECT behavior. The current implementation does NOT
+    /// escape metadata key/value strings — so this test is expected to FAIL until
+    /// the implementation is fixed.
+    #[test]
+    fn test_plugin_metadata_xml_escaping() {
+        struct XmlDangerousPlugin;
+
+        impl ContextPlugin for XmlDangerousPlugin {
+            fn name(&self) -> &str {
+                "xml_dangerous"
+            }
+
+            fn detect(&self, _directory: &Path) -> bool {
+                true
+            }
+
+            fn enrich(&self, _file_path: &Path, base_bones: &mut Vec<Bone>) -> Result<()> {
+                for bone in base_bones.iter_mut() {
+                    // Key with XML-dangerous characters
+                    bone.metadata.insert(
+                        "key<with>&\"special".to_string(),
+                        // Value that attempts XML injection: inject a sibling element
+                        "</metadata><malicious>payload</malicious><metadata key=\"x\">".to_string(),
+                    );
+                }
+                Ok(())
+            }
+        }
+
+        let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
+        let mut packer = Packer::new(
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
+            Parser {},
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        packer.register_plugin(Box::new(XmlDangerousPlugin));
+
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
+
+        // The raw injection string must NOT appear verbatim in the output.
+        assert!(
+            !output.contains("<malicious>"),
+            "Bare <malicious> tag found in output — metadata value was not XML-escaped; got:\n{}",
+            output
+        );
+        assert!(
+            !output.contains("</malicious>"),
+            "Bare </malicious> tag found in output — metadata value was not XML-escaped; got:\n{}",
+            output
+        );
+
+        // Escaped forms must be present instead.
+        // The value contains '<' and '>' so at minimum &lt; and/or &gt; must appear.
+        assert!(
+            output.contains("&lt;") || output.contains("&gt;") || output.contains("&amp;"),
+            "Expected XML-escaped entities (&lt;, &gt;, or &amp;) in metadata output; got:\n{}",
+            output
+        );
+
+        // The document must still be well-formed (closing tag present).
+        assert!(
+            output.contains("</repository>"),
+            "Output must still contain </repository> after metadata injection; got:\n{}",
+            output
+        );
+    }
+
 }
