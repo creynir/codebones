@@ -74,6 +74,12 @@ pub fn index(dir: &Path) -> Result<()> {
 /// Retrieves the raw source content of a symbol (using `::` notation) or a file path from the cache.
 ///
 /// Returns an error if the symbol or path is not found; run `index` first to populate the cache.
+///
+/// # Security
+///
+/// Path lookup is performed against the SQLite cache only — no filesystem reads occur.
+/// `codebones.db` is a trust boundary: callers must ensure the database file has
+/// appropriate filesystem permissions and has not been tampered with.
 pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
     let db_path = dir.join("codebones.db");
     let db_path_str = db_path
@@ -100,6 +106,12 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
 /// Returns a skeleton view of a source file by eliding function and class bodies with `...`.
 ///
 /// Falls back to the full raw source if the file's language is not supported by the parser.
+///
+/// # Security
+///
+/// Path lookup is performed against the SQLite cache only — no filesystem reads occur.
+/// `codebones.db` is a trust boundary: callers must ensure the database file has
+/// appropriate filesystem permissions and has not been tampered with.
 pub fn outline(dir: &Path, path: &str) -> Result<String> {
     let db_path = dir.join("codebones.db");
     let db_path_str = db_path
@@ -156,7 +168,8 @@ pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
     let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
-    let like_query = format!("%{}%", query);
+    let escaped = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let like_query = format!("%{}%", escaped);
     cache.search_symbol_ids(&like_query).map_err(Into::into)
 }
 

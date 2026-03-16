@@ -232,7 +232,7 @@ impl CacheStore for SqliteCache {
     fn search_symbol_ids(&self, like_pattern: &str) -> rusqlite::Result<Vec<String>> {
         let mut stmt = self
             .conn
-            .prepare("SELECT id FROM symbols WHERE name LIKE ?1")?;
+            .prepare("SELECT id FROM symbols WHERE name LIKE ?1 ESCAPE '\\'")?;
         let rows = stmt.query_map(rusqlite::params![like_pattern], |row| row.get(0))?;
         let mut ids = Vec::new();
         for row in rows {

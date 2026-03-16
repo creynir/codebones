@@ -392,22 +392,19 @@ fn search_handles_percent_special_character() -> Result<(), Box<dyn std::error::
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
     api::index(dir.path()).expect("index");
 
-    // '%' is a SQL LIKE wildcard; it should be handled without panicking or returning an error.
+    // '%' is a SQL LIKE wildcard; after escaping it must be treated as a literal '%'.
+    // No symbol names contain a literal '%', so the result should be an empty vec.
     let results = api::search(dir.path(), "%");
-    // Either returns results or an empty vec — must not panic or error due to SQL injection.
-    // The expected correct behavior is that '%' alone matches everything (LIKE %%), but
-    // the implementation currently does not escape it. This test documents the desired behavior.
     assert!(
         results.is_ok(),
         "search with '%' should not return an error; got: {:?}",
         results.err()
     );
-    // A bare '%' is an unescaped SQL LIKE wildcard that matches every symbol name.
-    // Assert the result is non-empty — the indexed file has symbols so at least one must match.
     let results = results.expect("search with '%' must succeed");
     assert!(
-        !results.is_empty(),
-        "search with '%' (SQL LIKE wildcard) should match all indexed symbols; got empty vec"
+        results.is_empty(),
+        "search with '%' should return empty vec after escaping (no symbols contain literal '%'); got: {:?}",
+        results
     );
     Ok(())
 }

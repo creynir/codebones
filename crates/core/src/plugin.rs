@@ -302,7 +302,23 @@ impl Packer {
                 OutputFormat::Markdown => {
                     output.push_str(&format!("## {}\n\n", path.display()));
                     if !degrade_to_bones {
-                        output.push_str(&format!("```\n{}\n```\n\n", content));
+                        // Find longest run of backticks in content and use one more as the fence
+                        // delimiter (CommonMark spec approach) to prevent fence injection.
+                        let max_backticks = {
+                            let mut max = 0usize;
+                            let mut cur = 0usize;
+                            for c in content.chars() {
+                                if c == '`' {
+                                    cur += 1;
+                                    max = max.max(cur);
+                                } else {
+                                    cur = 0;
+                                }
+                            }
+                            max
+                        };
+                        let fence = "`".repeat(max_backticks.max(2) + 1);
+                        output.push_str(&format!("{}\n{}\n{}\n\n", fence, content, fence));
                     }
                     // Only print Bones section if plugins added metadata
                     let has_metadata = bones.iter().any(|b| !b.metadata.is_empty());
