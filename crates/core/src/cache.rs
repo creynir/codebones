@@ -20,6 +20,9 @@ pub struct Symbol {
     pub byte_length: usize,
 }
 
+/// File path with its associated (kind, name) symbol pairs.
+pub type FileSymbolList = Vec<(String, Vec<(String, String)>)>;
+
 pub trait CacheStore {
     /// Initialize the database schema
     fn init(&self) -> rusqlite::Result<()>;
@@ -49,7 +52,7 @@ pub trait CacheStore {
     fn list_file_paths(&self) -> rusqlite::Result<Vec<String>>;
 
     /// List all files with their associated symbols (kind, name), ordered by byte_offset
-    fn list_files_with_symbols(&self) -> rusqlite::Result<Vec<(String, Vec<(String, String)>)>>;
+    fn list_files_with_symbols(&self) -> rusqlite::Result<FileSymbolList>;
 
     /// Search symbol IDs whose name matches a SQL LIKE pattern
     fn search_symbol_ids(&self, like_pattern: &str) -> rusqlite::Result<Vec<String>>;
@@ -216,7 +219,7 @@ impl CacheStore for SqliteCache {
         Ok(paths)
     }
 
-    fn list_files_with_symbols(&self) -> rusqlite::Result<Vec<(String, Vec<(String, String)>)>> {
+    fn list_files_with_symbols(&self) -> rusqlite::Result<FileSymbolList> {
         let mut file_stmt = self.conn.prepare("SELECT id, path FROM files")?;
         let mut file_rows = file_stmt.query([])?;
         let mut result = Vec::new();

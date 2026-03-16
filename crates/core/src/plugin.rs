@@ -5,9 +5,15 @@ use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+// Regex::new is called inside OnceLock::get_or_init, which guarantees compilation at most once.
+// Clippy cannot see through the OnceLock abstraction and fires regex_creation_in_loops.
+#[allow(clippy::regex_creation_in_loops)]
 static RE_EMPTY_LINES: OnceLock<regex::Regex> = OnceLock::new();
+#[allow(clippy::regex_creation_in_loops)]
 static RE_BASE64: OnceLock<regex::Regex> = OnceLock::new();
+#[allow(clippy::regex_creation_in_loops)]
 static RE_LINE_COMMENT: OnceLock<regex::Regex> = OnceLock::new();
+#[allow(clippy::regex_creation_in_loops)]
 static RE_BLOCK_COMMENT: OnceLock<regex::Regex> = OnceLock::new();
 
 /// A plugin that can enrich extracted code bones with domain-specific metadata.
@@ -90,6 +96,10 @@ impl Packer {
     }
 
     /// Packs the specified files into a single formatted string.
+    // OnceLock::get_or_init guarantees each regex is compiled at most once.
+    // Clippy fires regex_creation_in_loops because it cannot see through the OnceLock
+    // abstraction — the allow is intentional and correct.
+    #[allow(clippy::regex_creation_in_loops)]
     pub fn pack(&self, file_paths: &[PathBuf]) -> Result<String> {
         let _ = &self.parser;
 
@@ -471,7 +481,7 @@ mod tests {
             false,
             false,
         );
-        let result = packer.pack(&[file_path.clone()]);
+        let result = packer.pack(std::slice::from_ref(&file_path));
         assert!(result.is_ok());
         let output = result.expect("pack should succeed");
         assert!(output.contains(&format!("## {}", file_path.display())));
@@ -943,7 +953,7 @@ mod tests {
                 false,
                 false,
             );
-            let result = packer.pack(&[file_path.clone()]);
+            let result = packer.pack(std::slice::from_ref(&file_path));
             assert!(
                 result.is_ok(),
                 "pack() panicked or errored at max_tokens={}",
