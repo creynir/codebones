@@ -83,6 +83,17 @@ Headline medians from the latest run (v0.3.0):
 
 Benchmark machine: macOS 15.7.1, Apple M4, 16 GB RAM (full environment and pinned revisions in benchmark methodology).
 
+## Works with Phalanx
+
+[Phalanx](https://github.com/creynir/phalanx) is a multi-agent orchestration CLI that pairs naturally with codebones. When phalanx agents work on a real codebase, codebones gives them a structural map upfront — file tree and function signatures — so each agent goes straight to work instead of spending tokens on code discovery.
+
+```bash
+# Generate context before running your phalanx team
+codebones pack . --format markdown --max-tokens 40000 > context.md
+```
+
+Reference the output in your agent prompts so every agent in the team arrives oriented.
+
 ## Documentation
 
 For AI agents and developers looking to write custom context plugins, please refer to the [Plugin Authoring Guide](docs/PLUGIN_AUTHORING_GUIDE.md).
