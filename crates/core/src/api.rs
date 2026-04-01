@@ -26,8 +26,25 @@ pub fn index(dir: &Path) -> Result<()> {
         .collect();
 
     for cached_path in cache.list_file_paths()? {
-        if !current_paths.contains(&cached_path) {
-            cache.delete_file(&cached_path)?;
+        if current_paths.contains(&cached_path) {
+            continue;
+        }
+
+        let full_path = dir.join(&cached_path);
+        match fs::symlink_metadata(&full_path) {
+            Ok(_) => {
+                // The file still exists on disk but was skipped by the indexer
+                // (for example due to a transient read/permission failure). Keep
+                // the last known cached content instead of treating it as deleted.
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                cache.delete_file(&cached_path)?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+                // Preserve the cached entry when the file still exists but is no
+                // longer readable.
+            }
+            Err(error) => return Err(error.into()),
         }
     }
 
@@ -37,10 +54,13 @@ pub fn index(dir: &Path) -> Result<()> {
 
         if existing_hash.as_deref() != Some(fh.hash.as_str()) {
             let full_path = dir.join(&fh.path);
-            let content = fs::read(&full_path).unwrap_or_else(|e| {
-                eprintln!("Warning: could not read {}: {}", full_path.display(), e);
-                vec![]
-            });
+            let content = match fs::read(&full_path) {
+                Ok(content) => content,
+                Err(e) => {
+                    eprintln!("Warning: could not read {}: {}", full_path.display(), e);
+                    continue;
+                }
+            };
 
             // Delete old file to trigger cascade delete of symbols.
             // Ignoring the error here is intentional: if the file does not yet exist in
@@ -231,10 +251,7 @@ pub fn pack(
     let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
-    let format = match format_str.to_lowercase().as_str() {
-        "xml" => OutputFormat::Xml,
-        _ => OutputFormat::Markdown,
-    };
+    let format = OutputFormat::parse(format_str)?;
 
     // Get all files
     let mut paths = Vec::new();
@@ -315,9 +332,10 @@ pub fn pack(
         }
     }
 
-    let packer = Packer::new(
+    let packer = Packer::with_workspace_root(
         cache,
         crate::parser::Parser {},
+        base_dir.to_path_buf(),
         format,
         max_tokens,
         options.no_file_summary,

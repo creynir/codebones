@@ -307,3 +307,85 @@ fn test_index_creates_db() {
         "codebones.db must be created after running 'codebones index'"
     );
 }
+
+#[test]
+fn test_search_can_target_indexed_repo_outside_cwd() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+    let outside = TempDir::new().unwrap();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(outside.path())
+        .args(["index", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(outside.path())
+        .args(["search", "--dir", root.to_str().unwrap(), "hello_world"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("hello_world"));
+}
+
+#[test]
+fn test_get_can_target_indexed_repo_outside_cwd() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+    let outside = TempDir::new().unwrap();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(outside.path())
+        .args(["index", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(outside.path())
+        .args(["get", "--dir", root.to_str().unwrap(), "dummy.rs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("println!(\"Hello\")"));
+}
+
+#[test]
+fn test_outline_can_target_indexed_repo_outside_cwd() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+    let outside = TempDir::new().unwrap();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(outside.path())
+        .args(["index", root.to_str().unwrap()])
+        .assert()
+        .success();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(outside.path())
+        .args(["outline", "--dir", root.to_str().unwrap(), "dummy.rs"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("pub fn hello_world()").and(predicate::str::contains("...")),
+        );
+}
+
+#[test]
+fn test_pack_rejects_invalid_format() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["pack", ".", "--format", "json"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid output format"));
+}

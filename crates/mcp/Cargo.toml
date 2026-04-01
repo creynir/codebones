@@ -9,5 +9,10 @@ repository = "https://github.com/creynir/codebones"
 [dependencies]
 anyhow = "1.0.102"
 codebones-core = { path = "../core", version = "0.3.1" }
-rmcp = "1.2.0"
+rmcp = { version = "1.2.0", features = ["client", "transport-async-rw", "transport-io"] }
+schemars = "1.0"
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1.50.0", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

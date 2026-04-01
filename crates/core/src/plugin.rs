@@ -35,10 +35,21 @@ pub enum OutputFormat {
     Markdown,
 }
 
+impl OutputFormat {
+    pub fn parse(format: &str) -> Result<Self> {
+        match format.to_lowercase().as_str() {
+            "xml" => Ok(Self::Xml),
+            "markdown" => Ok(Self::Markdown),
+            other => anyhow::bail!("Invalid output format: {other}. Expected 'xml' or 'markdown'"),
+        }
+    }
+}
+
 /// Bundles files and their enriched bones into an AI-friendly output format.
 pub struct Packer {
     cache: SqliteCache,
     parser: Parser,
+    workspace_root: PathBuf,
     plugins: Vec<Box<dyn ContextPlugin>>,
     format: OutputFormat,
     max_tokens: Option<usize>,
@@ -76,9 +87,38 @@ impl Packer {
         remove_empty_lines: bool,
         truncate_base64: bool,
     ) -> Self {
+        Self::with_workspace_root(
+            cache,
+            parser,
+            PathBuf::from("."),
+            format,
+            max_tokens,
+            no_file_summary,
+            no_files,
+            remove_comments,
+            remove_empty_lines,
+            truncate_base64,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn with_workspace_root(
+        cache: SqliteCache,
+        parser: Parser,
+        workspace_root: PathBuf,
+        format: OutputFormat,
+        max_tokens: Option<usize>,
+        no_file_summary: bool,
+        no_files: bool,
+        remove_comments: bool,
+        remove_empty_lines: bool,
+        truncate_base64: bool,
+    ) -> Self {
+        let _ = cache.init();
         Self {
             cache,
             parser,
+            workspace_root,
             plugins: Vec::new(),
             format,
             max_tokens,
@@ -104,27 +144,27 @@ impl Packer {
         let _ = &self.parser;
 
         let mut output = String::new();
-
-        // Retrieve all files and their symbols from DB to build the skeleton map
-        let db_files_symbols: Vec<(String, Vec<(String, String)>)> =
-            self.cache.list_files_with_symbols().unwrap_or_default();
+        let active_plugins: Vec<&dyn ContextPlugin> = self
+            .plugins
+            .iter()
+            .filter(|plugin| plugin.detect(&self.workspace_root))
+            .map(|plugin| plugin.as_ref())
+            .collect();
 
         match self.format {
             OutputFormat::Xml => output.push_str("<repository>\n"),
             OutputFormat::Markdown => {}
         }
 
-        // Match the correct DB file path using ends_with since path_str may contain dir prefix
-        let lookup_symbols = |path: &PathBuf| -> Vec<(String, String)> {
-            let path_str = path.to_string_lossy().to_string();
-            let path_normalized = path_str.strip_prefix("./").unwrap_or(&path_str);
-            db_files_symbols
-                .iter()
-                .find(|(db_p, _)| {
-                    path_normalized.ends_with(db_p.as_str()) || db_p.ends_with(path_normalized)
-                })
-                .map(|(_, syms)| syms.clone())
-                .unwrap_or_default()
+        let lookup_symbols = |path: &PathBuf| -> Result<Vec<(String, String)>> {
+            let relative_path = path
+                .strip_prefix(&self.workspace_root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
+            self.cache
+                .get_file_symbols(&relative_path)
+                .map_err(Into::into)
         };
 
         // Generate Skeleton Map
@@ -137,7 +177,7 @@ impl Packer {
                             "    <file path=\"{}\">\n",
                             Self::xml_escape(&path.display().to_string())
                         ));
-                        for (kind, name) in lookup_symbols(path) {
+                        for (kind, name) in lookup_symbols(path)? {
                             output.push_str(&format!(
                                 "      <signature>{} {}</signature>\n",
                                 Self::xml_escape(&kind),
@@ -152,7 +192,7 @@ impl Packer {
                     output.push_str("## Skeleton Map\n\n");
                     for path in file_paths {
                         output.push_str(&format!("- {}\n", path.display()));
-                        for (kind, name) in lookup_symbols(path) {
+                        for (kind, name) in lookup_symbols(path)? {
                             output.push_str(&format!("  - {} {}\n", kind, name));
                         }
                     }
@@ -271,10 +311,8 @@ impl Packer {
 
             let mut bones = vec![Bone::default()];
 
-            for plugin in &self.plugins {
-                if plugin.detect(path) {
-                    plugin.enrich(path, &mut bones)?;
-                }
+            for plugin in &active_plugins {
+                plugin.enrich(path, &mut bones)?;
             }
 
             if !degrade_to_bones {
@@ -591,6 +629,9 @@ mod tests {
     // -------------------------------------------------------------------------
     fn make_temp_file(dir: &tempfile::TempDir, filename: &str, content: &str) -> PathBuf {
         let file_path = dir.path().join(filename);
+        if let Some(parent) = file_path.parent() {
+            std::fs::create_dir_all(parent).expect("failed to create parent directories");
+        }
         let mut f = std::fs::File::create(&file_path).expect("failed to create temp file");
         f.write_all(content.as_bytes())
             .expect("failed to write file content");
@@ -630,9 +671,10 @@ mod tests {
         let dir = tempfile::TempDir::new().expect("failed to create temp dir");
         let file_path = make_temp_file(&dir, "bad.rs", "fn bad() {}\n");
 
-        let packer = Packer::new(
+        let packer = Packer::with_workspace_root(
             cache,
             Parser {},
+            dir.path().to_path_buf(),
             OutputFormat::Xml,
             None,
             false, // no_file_summary
@@ -786,7 +828,7 @@ mod tests {
         let file_path = make_temp_file(&dir, "lib.rs", "fn alpha() {}\n");
 
         let file_id = cache
-            .upsert_file(file_path.to_string_lossy().as_ref(), "h2", b"fn alpha() {}")
+            .upsert_file("lib.rs", "h2", b"fn alpha() {}")
             .expect("upsert_file should succeed");
         cache
             .insert_symbol(&crate::cache::Symbol {
@@ -799,9 +841,10 @@ mod tests {
             })
             .expect("symbol insert should succeed");
 
-        let packer = Packer::new(
+        let packer = Packer::with_workspace_root(
             cache,
             Parser {},
+            dir.path().to_path_buf(),
             OutputFormat::Markdown,
             None,
             false,
@@ -839,7 +882,7 @@ mod tests {
         let file_path = make_temp_file(&dir, "weird.rs", "fn weird() {}\n");
 
         let file_id = cache
-            .upsert_file(file_path.to_string_lossy().as_ref(), "h3", b"fn weird() {}")
+            .upsert_file("weird.rs", "h3", b"fn weird() {}")
             .expect("upsert_file should succeed");
         // Symbol name with markdown special characters
         cache
@@ -853,9 +896,10 @@ mod tests {
             })
             .expect("symbol insert should succeed");
 
-        let packer = Packer::new(
+        let packer = Packer::with_workspace_root(
             cache,
             Parser {},
+            dir.path().to_path_buf(),
             OutputFormat::Markdown,
             None,
             false,
@@ -873,6 +917,123 @@ mod tests {
         assert!(
             output.contains("*_[weird`_]*"),
             "Symbol name with Markdown special chars should appear verbatim"
+        );
+    }
+
+    #[test]
+    fn test_markdown_skeleton_map_uses_exact_relative_path_for_duplicate_basenames() {
+        use crate::cache::CacheStore;
+
+        let cache = SqliteCache::new_in_memory().expect("failed to create test cache");
+        cache.init().expect("failed to init cache schema");
+
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        std::fs::create_dir_all(dir.path().join("src")).expect("create src dir");
+        std::fs::create_dir_all(dir.path().join("tests")).expect("create tests dir");
+
+        let src_path = make_temp_file(&dir, "src/lib.rs", "fn alpha() {}\n");
+        let tests_path = make_temp_file(&dir, "tests/lib.rs", "fn beta() {}\n");
+
+        let src_file_id = cache
+            .upsert_file("src/lib.rs", "h-src", b"fn alpha() {}")
+            .expect("upsert_file should succeed");
+        cache
+            .insert_symbol(&crate::cache::Symbol {
+                id: "src_alpha".to_string(),
+                file_id: src_file_id,
+                name: "alpha".to_string(),
+                kind: "function".to_string(),
+                byte_offset: 0,
+                byte_length: 13,
+            })
+            .expect("insert alpha symbol");
+
+        let tests_file_id = cache
+            .upsert_file("tests/lib.rs", "h-tests", b"fn beta() {}")
+            .expect("upsert_file should succeed");
+        cache
+            .insert_symbol(&crate::cache::Symbol {
+                id: "tests_beta".to_string(),
+                file_id: tests_file_id,
+                name: "beta".to_string(),
+                kind: "function".to_string(),
+                byte_offset: 0,
+                byte_length: 12,
+            })
+            .expect("insert beta symbol");
+
+        let packer = Packer::with_workspace_root(
+            cache,
+            Parser {},
+            dir.path().to_path_buf(),
+            OutputFormat::Markdown,
+            None,
+            false,
+            true,
+            false,
+            false,
+            false,
+        );
+        let output = packer
+            .pack(&[src_path.clone(), tests_path.clone()])
+            .expect("pack should succeed");
+
+        let expected_src = format!("- {}\n  - function alpha", src_path.display());
+        let expected_tests = format!("- {}\n  - function beta", tests_path.display());
+        assert!(
+            output.contains(&expected_src),
+            "src/lib.rs should retain its own symbols; got:\n{output}"
+        );
+        assert!(
+            output.contains(&expected_tests),
+            "tests/lib.rs should retain its own symbols; got:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_plugin_detection_uses_workspace_root_for_nested_files() {
+        struct RootMarkerPlugin;
+
+        impl ContextPlugin for RootMarkerPlugin {
+            fn name(&self) -> &str {
+                "root-marker"
+            }
+
+            fn detect(&self, workspace_root: &Path) -> bool {
+                workspace_root.join("manifest.json").exists()
+            }
+
+            fn enrich(&self, _file_path: &Path, base_bones: &mut Vec<Bone>) -> Result<()> {
+                for bone in base_bones.iter_mut() {
+                    bone.metadata
+                        .insert("root_detected".to_string(), "true".to_string());
+                }
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::TempDir::new().expect("failed to create temp dir");
+        std::fs::write(dir.path().join("manifest.json"), "{}").expect("write root marker");
+        let nested = make_temp_file(&dir, "src/lib.rs", "fn nested() {}\n");
+
+        let mut packer = Packer::with_workspace_root(
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
+            Parser {},
+            dir.path().to_path_buf(),
+            OutputFormat::Xml,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        packer.register_plugin(Box::new(RootMarkerPlugin));
+
+        let output = packer.pack(&[nested]).expect("pack should succeed");
+        assert!(
+            output.contains("root_detected"),
+            "plugin detect() should run against workspace root and enrich nested files"
         );
     }
 

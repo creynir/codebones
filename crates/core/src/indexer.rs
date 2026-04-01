@@ -153,15 +153,27 @@ impl Indexer for DefaultIndexer {
             }
 
             // Size limit
-            let metadata = std::fs::metadata(path)?;
+            let metadata = match std::fs::metadata(path) {
+                Ok(metadata) => metadata,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
+                Err(error) => return Err(error.into()),
+            };
             if metadata.len() > options.max_file_size_bytes {
                 continue;
             }
 
             // Binary detection (null bytes) and PEM credential detection
-            let mut file = File::open(path)?;
+            let mut file = match File::open(path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
+                Err(error) => return Err(error.into()),
+            };
             let mut buffer = [0; 8192];
-            let bytes_read = file.read(&mut buffer)?;
+            let bytes_read = match file.read(&mut buffer) {
+                Ok(bytes_read) => bytes_read,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
+                Err(error) => return Err(error.into()),
+            };
             let chunk = &buffer[..bytes_read];
             if chunk.contains(&0) {
                 continue;
@@ -173,8 +185,16 @@ impl Indexer for DefaultIndexer {
 
             // Hash
             let mut hasher = Sha256::new();
-            let mut file = File::open(path)?;
-            std::io::copy(&mut file, &mut hasher)?;
+            let mut file = match File::open(path) {
+                Ok(file) => file,
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
+                Err(error) => return Err(error.into()),
+            };
+            match std::io::copy(&mut file, &mut hasher) {
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => continue,
+                Err(error) => return Err(error.into()),
+            }
             let hash = hex::encode(hasher.finalize());
 
             let rel_path = path
