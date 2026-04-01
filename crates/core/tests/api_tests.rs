@@ -121,6 +121,36 @@ fn index_updates_cache_after_file_changes() -> Result<(), Box<dyn std::error::Er
 }
 
 #[test]
+fn index_prunes_deleted_files_on_reindex() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    fs::write(dir.path().join("lib.rs"), "pub fn compat() {}\n").expect("write initial file");
+
+    api::index(dir.path()).expect("first index");
+
+    let initial_results = api::search(dir.path(), "compat").expect("initial search");
+    assert_eq!(
+        initial_results,
+        vec!["lib.rs::compat".to_string()],
+        "initial index should contain the compat symbol"
+    );
+
+    fs::remove_file(dir.path().join("lib.rs")).expect("remove indexed file");
+    api::index(dir.path()).expect("second index after delete");
+
+    let db_path = dir.path().join("codebones.db");
+    let conn = rusqlite::Connection::open(&db_path)?;
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+    assert_eq!(count, 0, "deleted files should be pruned from the cache");
+
+    let results = api::search(dir.path(), "compat").expect("search after delete");
+    assert!(
+        results.is_empty(),
+        "deleted symbol 'compat' should not appear after re-indexing"
+    );
+    Ok(())
+}
+
+#[test]
 fn index_handles_empty_directory_gracefully() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
 

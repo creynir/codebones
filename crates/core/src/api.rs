@@ -3,6 +3,7 @@ use crate::indexer::{DefaultIndexer, Indexer, IndexerOptions};
 use crate::parser::{get_spec_for_extension, parse_file};
 use crate::plugin::{OutputFormat, Packer};
 use anyhow::Result;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -19,6 +20,16 @@ pub fn index(dir: &Path) -> Result<()> {
 
     let indexer = DefaultIndexer;
     let hashes = indexer.index(dir, &IndexerOptions::default())?;
+    let current_paths: HashSet<String> = hashes
+        .iter()
+        .map(|fh| fh.path.to_string_lossy().to_string())
+        .collect();
+
+    for cached_path in cache.list_file_paths()? {
+        if !current_paths.contains(&cached_path) {
+            cache.delete_file(&cached_path)?;
+        }
+    }
 
     for fh in hashes {
         let path_str = fh.path.to_string_lossy().to_string();
