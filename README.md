@@ -53,10 +53,12 @@ cargo install codebones
 pip install codebones
 ```
 
+The Python package installs the `codebones` and `codebones-mcp` binaries. It does not currently expose a separate Python API.
+
 ## Quick start
 
 ```bash
-# Index the current repo (creates .codebones SQLite cache)
+# Index the current repo (creates codebones.db)
 codebones index .
 
 # Pack into a single AI-ready payload within a token budget
@@ -70,6 +72,9 @@ codebones get "MyClass.my_method"
 
 # View a file's structural skeleton
 codebones outline src/main.rs
+
+# Query an indexed repo without changing cwd
+codebones search --dir /path/to/repo "Authentication"
 ```
 
 ## What it does
@@ -192,9 +197,9 @@ Exposes `index`, `outline`, `get`, and `search` as MCP tools.
 ```
 codebones index <dir>                        Build/update the SQLite cache
 codebones pack <dir> [options]               Pack repo into LLM-ready payload
-codebones search <query>                     Substring search across symbol names
-codebones get <symbol>                       Retrieve full source by symbol ID
-codebones outline <path>                     Skeleton view of a file or directory
+codebones search [--dir <repo>] <query>      Substring search across symbol names
+codebones get [--dir <repo>] <symbol>        Retrieve full source by symbol ID or file path
+codebones outline [--dir <repo>] <path>      Skeleton view of an indexed file
 ```
 
 ### `pack` options
@@ -223,7 +228,7 @@ Domain-specific metadata can be injected via the `ContextPlugin` trait. See the 
 
 ## Contributing
 
-Issues and pull requests are welcome on [GitHub](https://github.com/creynir/codebones).
+Issues and pull requests are welcome. For questions and ideas, start a thread in [Discussions](https://github.com/creynir/codebones/discussions).
 
 ## License
 

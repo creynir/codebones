@@ -59,7 +59,7 @@ pub trait ContextPlugin: Send + Sync {
     /// The unique name of the plugin (e.g., "dbt", "openapi").
     fn name(&self) -> &str;
     
-    /// Returns true if this plugin should be active for the given directory/workspace.
+    /// Returns true if this plugin should be active for the given workspace root.
     fn detect(&self, directory: &Path) -> bool;
     
     /// Enriches the extracted bones for a specific file with additional metadata.
@@ -106,10 +106,10 @@ impl ContextPlugin for DbtPlugin {
         "dbt"
     }
 
-    fn detect(&self, directory: &Path) -> bool {
+    fn detect(&self, workspace_root: &Path) -> bool {
         // Detect if this is a dbt project by checking for manifest.json
-        // or dbt_project.yml in the target directory.
-        let manifest_path = directory.join("target/manifest.json");
+        // or dbt_project.yml in the workspace root.
+        let manifest_path = workspace_root.join("target/manifest.json");
         manifest_path.exists()
     }
 

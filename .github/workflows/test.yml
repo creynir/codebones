@@ -34,3 +34,19 @@ jobs:
 
       - name: Run Tests
         run: cargo test --workspace --exclude codebones-python-ext
+
+      - name: Check Python Packaging Crate
+        run: cargo check -p codebones-python-ext
+
+      - name: Check Python Package Version Parity
+        run: python scripts/check_python_package_version.py
+
+      - name: Build And Smoke Test Python Wheel
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install maturin
+          maturin build --release --out dist -m crates/python-ext/Cargo.toml
+          python -m pip install --force-reinstall dist/*.whl
+          codebones --version
+          python scripts/mcp_stdio_smoke.py

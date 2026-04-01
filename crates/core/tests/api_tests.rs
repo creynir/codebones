@@ -209,22 +209,7 @@ fn index_skips_permission_denied_file_and_continues() -> Result<(), Box<dyn std:
     fs::set_permissions(&restricted, perms)?;
 
     // Should not error; should index readable.rs and skip restricted.rs.
-    // NOTE: current implementation may error on permission-denied files during walk.
-    // This is a known gap — Green team should fix the indexer to skip unreadable files.
-    // For now we accept both: Ok (skipped gracefully) or Err containing "Permission denied".
-    let result = api::index(dir.path());
-    if let Err(ref e) = result {
-        let msg = e.to_string();
-        assert!(
-            msg.contains("Permission denied") || msg.contains("permission"),
-            "index failed for unexpected reason: {msg}"
-        );
-        // Restore and return — implementation needs fixing but we document the gap
-        let mut p = fs::metadata(&restricted)?.permissions();
-        p.set_mode(0o644);
-        fs::set_permissions(&restricted, p)?;
-        return Ok(());
-    }
+    api::index(dir.path()).expect("permission denied files should be skipped");
 
     // Restore permissions so TempDir cleanup doesn't fail.
     let mut perms = fs::metadata(&restricted)?.permissions();
@@ -236,6 +221,49 @@ fn index_skips_permission_denied_file_and_continues() -> Result<(), Box<dyn std:
         !results.is_empty(),
         "readable file should be indexed even when sibling is unreadable"
     );
+    Ok(())
+}
+
+#[test]
+#[cfg(unix)]
+fn index_preserves_cached_content_for_previously_indexed_unreadable_file_on_reindex(
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = TempDir::new().expect("failed to create tempdir");
+    let restricted = dir.path().join("restricted.rs");
+    fs::write(&restricted, "pub fn secret() -> &'static str { \"ok\" }\n")
+        .expect("write restricted file");
+
+    api::index(dir.path()).expect("initial index should succeed");
+    assert_eq!(
+        api::search(dir.path(), "secret").expect("initial search"),
+        vec!["restricted.rs::secret".to_string()]
+    );
+
+    let mut perms = fs::metadata(&restricted)?.permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&restricted, perms)?;
+
+    api::index(dir.path()).expect("reindex should skip unreadable files without pruning cache");
+
+    let mut perms = fs::metadata(&restricted)?.permissions();
+    perms.set_mode(0o644);
+    fs::set_permissions(&restricted, perms)?;
+
+    let results = api::search(dir.path(), "secret").expect("search after unreadable reindex");
+    assert_eq!(
+        results,
+        vec!["restricted.rs::secret".to_string()],
+        "previously indexed unreadable files should keep their cached symbols"
+    );
+
+    let content = api::get(dir.path(), "restricted.rs").expect("cached file content");
+    assert!(
+        content.contains("pub fn secret()"),
+        "cached file content should be preserved for unreadable files"
+    );
+
     Ok(())
 }
 
@@ -668,6 +696,19 @@ fn pack_produces_valid_markdown_output() -> Result<(), Box<dyn std::error::Error
         "Markdown output should contain fenced code blocks; got: {output}"
     );
     Ok(())
+}
+
+#[test]
+fn pack_rejects_invalid_output_format() {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    let error = api::pack(dir.path(), "json", None, default_pack_options())
+        .expect_err("invalid output format should return an error");
+    assert!(
+        error.to_string().contains("Invalid output format: json"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]

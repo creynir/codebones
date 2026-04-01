@@ -16,19 +16,28 @@ pub enum Commands {
         #[arg(default_value = ".")]
         dir: PathBuf,
     },
-    /// Prints the file tree or the skeleton of a specific file
+    /// Prints the skeleton of a specific indexed file
     Outline {
-        /// The path to a file or directory
+        /// The repository directory containing the index (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// The path to a file in the indexed repository
         path: PathBuf,
     },
     /// Retrieves the full source code for a specific symbol or file
     Get {
+        /// The repository directory containing the index (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
         /// The symbol name (e.g., `src/main.rs::Database.connect`) or file path
         symbol_or_path: String,
     },
     /// Searches for symbols by name substring. Use an empty string ("") to list all indexed symbols.
     /// Note: % and _ are treated as literals, not wildcards.
     Search {
+        /// The repository directory containing the index (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
         /// Substring to match against symbol names. Pass "" to list all symbols.
         query: String,
     },
@@ -75,17 +84,19 @@ fn main() -> anyhow::Result<()> {
             codebones_core::api::index(&dir)?;
             println!("Indexing complete");
         }
-        Commands::Outline { path } => {
-            let result =
-                codebones_core::api::outline(std::path::Path::new("."), &path.to_string_lossy())?;
+        Commands::Outline { dir, path } => {
+            let result = codebones_core::api::outline(&dir, &path.to_string_lossy())?;
             println!("{}", result);
         }
-        Commands::Get { symbol_or_path } => {
-            let result = codebones_core::api::get(std::path::Path::new("."), &symbol_or_path)?;
+        Commands::Get {
+            dir,
+            symbol_or_path,
+        } => {
+            let result = codebones_core::api::get(&dir, &symbol_or_path)?;
             println!("{}", result);
         }
-        Commands::Search { query } => {
-            let results = codebones_core::api::search(std::path::Path::new("."), &query)?;
+        Commands::Search { dir, query } => {
+            let results = codebones_core::api::search(&dir, &query)?;
             for res in results {
                 println!("{}", res);
             }
