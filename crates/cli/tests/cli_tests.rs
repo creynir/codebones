@@ -964,3 +964,244 @@ fn test_index_does_not_create_claude_or_agents_md() {
         "index must NOT create AGENTS.md when it does not already exist"
     );
 }
+
+// ===========================================================================
+// graph command tests (AC 5–10) — failing tests (RED)
+//
+// These tests express the CLI acceptance criteria for `codebones graph`.
+// They will fail until the implementation is added.
+// ===========================================================================
+
+/// Helper: write a small TypeScript project with a known import graph.
+///
+///   src/main.ts   imports ./utils and ./db
+///   src/utils.ts  imports ./db
+///   src/db.ts     (no imports)
+///
+/// Import counts:
+///   db.ts    -> 2 (hottest)
+///   utils.ts -> 1
+///   main.ts  -> 0
+fn setup_graph_repo() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    let src = temp.path().join("src");
+    fs::create_dir_all(&src).unwrap();
+
+    fs::write(src.join("db.ts"), "export const db = { connect() {} };\n").unwrap();
+    fs::write(
+        src.join("utils.ts"),
+        "import { db } from './db';\nexport function query() { return db.connect(); }\n",
+    )
+    .unwrap();
+    fs::write(
+        src.join("main.ts"),
+        "import { query } from './utils';\nimport { db } from './db';\nexport function main() { query(); db.connect(); }\n",
+    )
+    .unwrap();
+
+    // Index the repo so the graph command has data to work with.
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["index", "."])
+        .assert()
+        .success();
+
+    temp
+}
+
+/// AC5: `codebones graph` outputs the full import graph in markdown (default format).
+/// Output must contain file names and their import counts.
+#[test]
+fn test_graph_default_outputs_markdown_with_file_and_counts() {
+    let temp = setup_graph_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph"])
+        .assert()
+        .success()
+        .stdout(
+            // Must mention db.ts (the hottest file) and its count
+            predicate::str::contains("db.ts")
+                .and(predicate::str::contains("2"))
+                // Must also mention utils.ts
+                .and(predicate::str::contains("utils.ts"))
+                // Must mention main.ts
+                .and(predicate::str::contains("main.ts")),
+        );
+}
+
+/// AC6: `codebones graph <file>` outputs the blast radius for that file.
+#[test]
+fn test_graph_file_outputs_blast_radius() {
+    let temp = setup_graph_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "src/db.ts"])
+        .assert()
+        .success()
+        .stdout(
+            // Both main.ts and utils.ts import db.ts transitively
+            predicate::str::contains("utils.ts").and(predicate::str::contains("main.ts")),
+        );
+}
+
+/// AC7: `codebones graph --format json` outputs JSON format.
+#[test]
+fn test_graph_format_json() {
+    let temp = setup_graph_repo();
+    let root = temp.path();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+    // JSON output must start with '{' or '[' and contain the file names.
+    assert!(
+        stdout.trim_start().starts_with('{') || stdout.trim_start().starts_with('['),
+        "graph --format json must produce JSON output; got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("db.ts"),
+        "JSON graph output must contain db.ts; got: {}",
+        stdout
+    );
+}
+
+/// AC8: `codebones graph --format xml` outputs XML format.
+#[test]
+fn test_graph_format_xml() {
+    let temp = setup_graph_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "--format", "xml"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("<")
+                .and(predicate::str::contains(">"))
+                .and(predicate::str::contains("db.ts")),
+        );
+}
+
+/// AC9: `codebones graph --top 1` shows only the single most-imported file.
+#[test]
+fn test_graph_top_n_limits_output_to_n_hottest_files() {
+    let temp = setup_graph_repo();
+    let root = temp.path();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "--top", "1"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+    // With --top 1, only db.ts (count=2) should appear.
+    assert!(
+        stdout.contains("db.ts"),
+        "--top 1 must include db.ts (hottest file); got: {}",
+        stdout
+    );
+    // utils.ts (count=1) must NOT appear when top=1.
+    assert!(
+        !stdout.contains("utils.ts"),
+        "--top 1 must not include utils.ts (second hottest); got: {}",
+        stdout
+    );
+}
+
+/// AC10: `codebones graph <file> --depth 2` limits the blast radius BFS depth.
+#[test]
+fn test_graph_file_depth_flag_limits_blast_radius() {
+    // Chain: a.ts -> b.ts -> c.ts -> d.ts
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    fs::write(root.join("d.ts"), "export const d = 4;\n").unwrap();
+    fs::write(
+        root.join("c.ts"),
+        "import { d } from './d';\nexport const c = 3;\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("b.ts"),
+        "import { c } from './c';\nexport const b = 2;\n",
+    )
+    .unwrap();
+    fs::write(
+        root.join("a.ts"),
+        "import { b } from './b';\nexport const a = 1;\n",
+    )
+    .unwrap();
+
+    // Index first.
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["index", "."])
+        .assert()
+        .success();
+
+    // With --depth 1, only c.ts (direct importer of d.ts) should appear.
+    let output_depth1 = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "d.ts", "--depth", "1"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout1 = String::from_utf8_lossy(&output_depth1);
+    assert!(
+        stdout1.contains("c.ts"),
+        "--depth 1 must include c.ts (direct importer); got: {}",
+        stdout1
+    );
+    assert!(
+        !stdout1.contains("a.ts"),
+        "--depth 1 must NOT include a.ts (too deep); got: {}",
+        stdout1
+    );
+
+    // With --depth 3, all of a.ts, b.ts, c.ts should appear.
+    let output_depth3 = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "d.ts", "--depth", "3"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout3 = String::from_utf8_lossy(&output_depth3);
+    assert!(
+        stdout3.contains("a.ts"),
+        "--depth 3 must include a.ts; got: {}",
+        stdout3
+    );
+}

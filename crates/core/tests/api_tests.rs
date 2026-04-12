@@ -1475,3 +1475,291 @@ fn get_importers_returns_files_that_import_a_given_file() -> Result<(), Box<dyn 
     );
     Ok(())
 }
+
+// ===========================================================================
+// api::graph() and api::graph_file() — failing tests (RED)
+//
+// These tests express the acceptance criteria for the graph command.
+// They will fail until the implementation is added.
+// ===========================================================================
+
+/// Helper: write a small TypeScript project with a known import graph.
+///
+///   src/main.ts   imports ./utils and ./db
+///   src/utils.ts  imports ./db
+///   src/db.ts     (no imports)
+///
+/// Import counts (how many files import each file):
+///   db.ts    -> 2  (main.ts and utils.ts both import it)
+///   utils.ts -> 1  (main.ts imports it)
+///   main.ts  -> 0  (nothing imports it)
+fn write_ts_graph_fixture(dir: &TempDir) {
+    let src = dir.path().join("src");
+    fs::create_dir_all(&src).expect("create src/");
+
+    fs::write(
+        src.join("db.ts"),
+        "export const db = { connect() {} };\n",
+    )
+    .expect("write db.ts");
+
+    fs::write(
+        src.join("utils.ts"),
+        "import { db } from './db';\nexport function query() { return db.connect(); }\n",
+    )
+    .expect("write utils.ts");
+
+    fs::write(
+        src.join("main.ts"),
+        "import { query } from './utils';\nimport { db } from './db';\nexport function main() { query(); db.connect(); }\n",
+    )
+    .expect("write main.ts");
+}
+
+// ---------------------------------------------------------------------------
+// AC1: api::graph() returns a structured result with a `files` list (sorted
+//      by import count descending) and a full edge list.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn graph_returns_files_sorted_by_import_count_descending(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    let result = api::graph(dir.path()).expect("graph should succeed");
+
+    // Must have a `files` field with at least three entries.
+    assert!(
+        !result.files.is_empty(),
+        "graph result must contain at least one file entry; got empty list"
+    );
+
+    // The hottest file (db.ts, imported by 2 files) must appear first.
+    let first = &result.files[0];
+    assert!(
+        first.path.contains("db.ts"),
+        "db.ts (imported by 2 files) must be the first entry when sorted by count; got: {:?}",
+        result.files
+    );
+    assert_eq!(
+        first.import_count, 2,
+        "db.ts must have import_count=2; got: {}",
+        first.import_count
+    );
+
+    // utils.ts must appear second with count=1.
+    let second = result
+        .files
+        .iter()
+        .find(|f| f.path.contains("utils.ts"))
+        .expect("utils.ts must appear in graph result");
+    assert_eq!(
+        second.import_count, 1,
+        "utils.ts must have import_count=1; got: {}",
+        second.import_count
+    );
+
+    // main.ts must appear with count=0.
+    let main_entry = result
+        .files
+        .iter()
+        .find(|f| f.path.contains("main.ts"))
+        .expect("main.ts must appear in graph result");
+    assert_eq!(
+        main_entry.import_count, 0,
+        "main.ts must have import_count=0 (nothing imports it); got: {}",
+        main_entry.import_count
+    );
+
+    Ok(())
+}
+
+#[test]
+fn graph_returns_full_edge_list() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    let result = api::graph(dir.path()).expect("graph should succeed");
+
+    // The edge list must include at least the 3 known import edges.
+    assert!(
+        result.edges.len() >= 3,
+        "graph must have at least 3 edges (main->utils, main->db, utils->db); got: {:?}",
+        result.edges
+    );
+
+    // Each edge has a `from` and `to` field.
+    // Verify the main.ts -> db.ts edge exists.
+    let main_to_db = result
+        .edges
+        .iter()
+        .any(|e| e.from.contains("main.ts") && e.to.contains("db.ts"));
+    assert!(
+        main_to_db,
+        "edge from main.ts to db.ts must be present; edges: {:?}",
+        result.edges
+    );
+
+    // Verify the utils.ts -> db.ts edge exists.
+    let utils_to_db = result
+        .edges
+        .iter()
+        .any(|e| e.from.contains("utils.ts") && e.to.contains("db.ts"));
+    assert!(
+        utils_to_db,
+        "edge from utils.ts to db.ts must be present; edges: {:?}",
+        result.edges
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AC2: api::graph_file() returns the blast radius (transitively affected files).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn graph_file_returns_affected_files_for_direct_importers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    // Changing db.ts should affect main.ts and utils.ts (both import it directly).
+    let result =
+        api::graph_file(dir.path(), "src/db.ts", 1).expect("graph_file should succeed");
+
+    assert!(
+        !result.affected_files.is_empty(),
+        "changing db.ts must affect at least one file"
+    );
+    assert!(
+        result.affected_files.iter().any(|f| f.contains("utils.ts")),
+        "utils.ts must be in the blast radius of db.ts; got: {:?}",
+        result.affected_files
+    );
+    assert!(
+        result.affected_files.iter().any(|f| f.contains("main.ts")),
+        "main.ts must be in the blast radius of db.ts (direct import); got: {:?}",
+        result.affected_files
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AC3: BFS follows reverse import edges (if A imports B, changing B affects A).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn graph_file_blast_radius_follows_reverse_edges() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    // utils.ts imports db.ts. main.ts imports utils.ts.
+    // Changing utils.ts should affect main.ts (reverse edge: main -> utils).
+    let result =
+        api::graph_file(dir.path(), "src/utils.ts", 3).expect("graph_file should succeed");
+
+    assert!(
+        result.affected_files.iter().any(|f| f.contains("main.ts")),
+        "main.ts must be in the blast radius of utils.ts (main imports utils); got: {:?}",
+        result.affected_files
+    );
+
+    // db.ts is NOT affected by changing utils.ts (db doesn't import utils).
+    assert!(
+        !result.affected_files.iter().any(|f| f.contains("db.ts")),
+        "db.ts must NOT be in the blast radius of utils.ts; got: {:?}",
+        result.affected_files
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AC4: max_depth limits the BFS traversal depth.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn graph_file_respects_max_depth_limit() -> Result<(), Box<dyn std::error::Error>> {
+    // Create a deeper chain: a.ts -> b.ts -> c.ts -> d.ts
+    let dir = TempDir::new().expect("failed to create tempdir");
+
+    fs::write(dir.path().join("d.ts"), "export const d = 4;\n").expect("write d.ts");
+    fs::write(
+        dir.path().join("c.ts"),
+        "import { d } from './d';\nexport const c = 3;\n",
+    )
+    .expect("write c.ts");
+    fs::write(
+        dir.path().join("b.ts"),
+        "import { c } from './c';\nexport const b = 2;\n",
+    )
+    .expect("write b.ts");
+    fs::write(
+        dir.path().join("a.ts"),
+        "import { b } from './b';\nexport const a = 1;\n",
+    )
+    .expect("write a.ts");
+
+    api::index(dir.path()).expect("index");
+
+    // Changing d.ts with depth=1: only c.ts (direct importer) should be in blast radius.
+    let result_depth1 =
+        api::graph_file(dir.path(), "d.ts", 1).expect("graph_file depth=1 should succeed");
+    assert!(
+        result_depth1
+            .affected_files
+            .iter()
+            .any(|f| f.contains("c.ts")),
+        "c.ts must be in depth=1 blast radius of d.ts; got: {:?}",
+        result_depth1.affected_files
+    );
+    assert!(
+        !result_depth1
+            .affected_files
+            .iter()
+            .any(|f| f.contains("a.ts")),
+        "a.ts must NOT be in depth=1 blast radius of d.ts (too deep); got: {:?}",
+        result_depth1.affected_files
+    );
+
+    // Changing d.ts with depth=3: a.ts, b.ts, c.ts should all be in blast radius.
+    let result_depth3 =
+        api::graph_file(dir.path(), "d.ts", 3).expect("graph_file depth=3 should succeed");
+    assert!(
+        result_depth3
+            .affected_files
+            .iter()
+            .any(|f| f.contains("a.ts")),
+        "a.ts must be in depth=3 blast radius of d.ts; got: {:?}",
+        result_depth3.affected_files
+    );
+
+    Ok(())
+}
+
+#[test]
+fn graph_file_returns_empty_for_file_with_no_importers(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    // main.ts is not imported by anything — blast radius is empty.
+    let result =
+        api::graph_file(dir.path(), "src/main.ts", 3).expect("graph_file should succeed");
+
+    assert!(
+        result.affected_files.is_empty(),
+        "main.ts has no importers, so blast radius must be empty; got: {:?}",
+        result.affected_files
+    );
+
+    Ok(())
+}
