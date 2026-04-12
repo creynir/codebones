@@ -73,8 +73,8 @@ fn index_creates_db_file() -> Result<(), Box<dyn std::error::Error>> {
     api::index(dir.path()).expect("index should succeed");
 
     assert!(
-        dir.path().join("codebones.db").exists(),
-        "codebones.db should be created after indexing"
+        dir.path().join(".codebones").join("codebones.db").exists(),
+        ".codebones/codebones.db should be created after indexing"
     );
     Ok(())
 }
@@ -88,7 +88,7 @@ fn index_idempotent_on_unchanged_directory() -> Result<(), Box<dyn std::error::E
     api::index(dir.path()).expect("second index should succeed without error");
 
     // After two identical runs the DB should still have exactly one file entry.
-    let db_path = dir.path().join("codebones.db");
+    let db_path = dir.path().join(".codebones").join("codebones.db");
     let conn = rusqlite::Connection::open(&db_path)?;
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
     assert_eq!(
@@ -137,7 +137,7 @@ fn index_prunes_deleted_files_on_reindex() -> Result<(), Box<dyn std::error::Err
     fs::remove_file(dir.path().join("lib.rs")).expect("remove indexed file");
     api::index(dir.path()).expect("second index after delete");
 
-    let db_path = dir.path().join("codebones.db");
+    let db_path = dir.path().join(".codebones").join("codebones.db");
     let conn = rusqlite::Connection::open(&db_path)?;
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
     assert_eq!(count, 0, "deleted files should be pruned from the cache");

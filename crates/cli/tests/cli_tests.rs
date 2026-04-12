@@ -290,8 +290,8 @@ fn test_index_creates_db() {
 
     // The DB must not exist before indexing
     assert!(
-        !root.join("codebones.db").exists(),
-        "codebones.db should not exist before indexing"
+        !root.join(".codebones").join("codebones.db").exists(),
+        ".codebones/codebones.db should not exist before indexing"
     );
 
     Command::cargo_bin("codebones")
@@ -303,8 +303,8 @@ fn test_index_creates_db() {
 
     // After indexing the DB file must be present
     assert!(
-        root.join("codebones.db").exists(),
-        "codebones.db must be created after running 'codebones index'"
+        root.join(".codebones").join("codebones.db").exists(),
+        ".codebones/codebones.db must be created after running 'codebones index'"
     );
 }
 

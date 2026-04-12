@@ -7,11 +7,84 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
+const CODEBONES_SECTION: &str = r#"
+## Codebones
+
+This project is indexed by [codebones](https://github.com/anthropics/codebones). Use `codebones search`, `codebones outline`, and `codebones get` to explore the codebase structure before reading files directly.
+"#;
+
+/// Performs first-run setup for a project directory:
+/// - Creates `.codebones/` directory if it doesn't exist
+/// - Deletes legacy `codebones.db` at root if it exists
+/// - If `.git/` exists: ensures `.codebones/` is in `.gitignore`
+/// - If `CLAUDE.md` exists: appends codebones section (if not already present)
+/// - If `AGENTS.md` exists: appends codebones section (if not already present)
+fn first_run_setup(dir: &Path) -> Result<()> {
+    // Create .codebones/ directory if it doesn't exist
+    let dot_codebones = dir.join(".codebones");
+    if !dot_codebones.exists() {
+        fs::create_dir_all(&dot_codebones)?;
+    }
+
+    // Delete legacy codebones.db at root if it exists
+    let legacy_db = dir.join("codebones.db");
+    if legacy_db.exists() {
+        fs::remove_file(&legacy_db)?;
+    }
+
+    // If .git/ exists, ensure .codebones/ is in .gitignore
+    if dir.join(".git").exists() {
+        let gitignore_path = dir.join(".gitignore");
+        let existing = if gitignore_path.exists() {
+            fs::read_to_string(&gitignore_path)?
+        } else {
+            String::new()
+        };
+        if !existing.lines().any(|line| line.trim() == ".codebones/") {
+            let new_content = if existing.is_empty() {
+                ".codebones/\n".to_string()
+            } else if existing.ends_with('\n') {
+                format!("{}.codebones/\n", existing)
+            } else {
+                format!("{}\n.codebones/\n", existing)
+            };
+            fs::write(&gitignore_path, new_content)?;
+        }
+    }
+
+    // If CLAUDE.md exists, append codebones section if not already present
+    let claude_md = dir.join("CLAUDE.md");
+    if claude_md.exists() {
+        let contents = fs::read_to_string(&claude_md)?;
+        if !contents.contains("codebones") {
+            let mut file = fs::OpenOptions::new().append(true).open(&claude_md)?;
+            use std::io::Write;
+            file.write_all(CODEBONES_SECTION.as_bytes())?;
+        }
+    }
+
+    // If AGENTS.md exists, append codebones section if not already present
+    let agents_md = dir.join("AGENTS.md");
+    if agents_md.exists() {
+        let contents = fs::read_to_string(&agents_md)?;
+        if !contents.contains("codebones") {
+            let mut file = fs::OpenOptions::new().append(true).open(&agents_md)?;
+            use std::io::Write;
+            file.write_all(CODEBONES_SECTION.as_bytes())?;
+        }
+    }
+
+    Ok(())
+}
+
 /// Walks `dir`, hashes every eligible file, and upserts changed files and their symbols into the local SQLite cache.
 ///
 /// Must be called before `get`, `outline`, or `search`; those functions read from the cache `index` populates.
 pub fn index(dir: &Path) -> Result<()> {
-    let db_path = dir.join("codebones.db");
+    // Perform first-run setup (create .codebones/, clean legacy db, update gitignore/docs)
+    first_run_setup(dir)?;
+
+    let db_path = dir.join(".codebones").join("codebones.db");
     let db_path_str = db_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
@@ -102,6 +175,15 @@ pub fn index(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Returns the path to the database file, creating the `.codebones/` directory if needed.
+fn db_path(dir: &Path) -> Result<std::path::PathBuf> {
+    let dot_codebones = dir.join(".codebones");
+    if !dot_codebones.exists() {
+        fs::create_dir_all(&dot_codebones)?;
+    }
+    Ok(dot_codebones.join("codebones.db"))
+}
+
 /// Retrieves the raw source content of a symbol (using `::` notation) or a file path from the cache.
 ///
 /// Returns an error if the symbol or path is not found; run `index` first to populate the cache.
@@ -109,10 +191,10 @@ pub fn index(dir: &Path) -> Result<()> {
 /// # Security
 ///
 /// Path lookup is performed against the SQLite cache only — no filesystem reads occur.
-/// `codebones.db` is a trust boundary: callers must ensure the database file has
+/// `.codebones/codebones.db` is a trust boundary: callers must ensure the database file has
 /// appropriate filesystem permissions and has not been tampered with.
 pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
-    let db_path = dir.join("codebones.db");
+    let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
@@ -144,7 +226,7 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
 /// `codebones.db` is a trust boundary: callers must ensure the database file has
 /// appropriate filesystem permissions and has not been tampered with.
 pub fn outline(dir: &Path, path: &str) -> Result<String> {
-    let db_path = dir.join("codebones.db");
+    let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
@@ -192,7 +274,7 @@ pub fn outline(dir: &Path, path: &str) -> Result<String> {
 ///
 /// Returns a list of fully-qualified symbol ID strings; an empty vec means no matches.
 pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
-    let db_path = dir.join("codebones.db");
+    let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
@@ -244,7 +326,7 @@ pub fn pack(
     // Ensure the cache is up to date before packing
     index(base_dir)?;
 
-    let db_path = base_dir.join("codebones.db");
+    let db_path = db_path(base_dir)?;
     let db_path_str = db_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
