@@ -135,7 +135,7 @@ pub fn index(dir: &Path) -> Result<()> {
                 }
             };
 
-            // Delete old file to trigger cascade delete of symbols.
+            // Delete old file to trigger cascade delete of symbols and imports.
             // Ignoring the error here is intentional: if the file does not yet exist in
             // the cache this is a no-op, which is the desired idempotent behaviour.
             let _ = cache.delete_file(&path_str);
@@ -167,12 +167,85 @@ pub fn index(dir: &Path) -> Result<()> {
                         };
                         cache.insert_symbol(&cache_sym)?;
                     }
+
+                    // Store imports for this file, resolving against the full set
+                    // of current on-disk paths so ordering doesn't affect resolution.
+                    let source_dir = Path::new(&path_str)
+                        .parent()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    for raw_import in doc.imports {
+                        let target_path =
+                            resolve_import(&raw_import, &source_dir, &current_paths);
+                        cache.insert_import(file_id, &target_path, &raw_import)?;
+                    }
                 }
             }
         }
     }
 
     Ok(())
+}
+
+/// Attempts to resolve a raw import string to a known file path in the cache.
+///
+/// Tries stripping `./` or `../` prefixes and appending common extensions against the
+/// set of known file paths. Falls back to the raw import string if no match is found.
+fn resolve_import(raw: &str, source_dir: &str, known_paths: &HashSet<String>) -> String {
+    // Common extensions to try when no extension is present
+    const EXTS: &[&str] = &[
+        ".ts", ".tsx", ".js", ".jsx", ".py", ".rs", ".go", ".java", ".c", ".cpp", ".cs", ".rb",
+        ".php", ".swift", ".h", ".hpp",
+    ];
+
+    // Candidates to try:
+    // 1. The raw import as-is
+    // 2. Joined with source_dir (for relative imports starting with ./ or ../)
+    // 3. Same candidates with common extensions appended
+
+    let candidates: Vec<String> = {
+        let mut v = Vec::new();
+
+        // Relative import
+        let joined = if source_dir.is_empty() {
+            raw.to_string()
+        } else {
+            format!("{}/{}", source_dir, raw)
+        };
+
+        // Strip leading ./ for relative imports
+        let stripped = if let Some(base) = raw.strip_prefix("./") {
+            if source_dir.is_empty() {
+                base.to_string()
+            } else {
+                format!("{}/{}", source_dir, base)
+            }
+        } else {
+            joined.clone()
+        };
+
+        v.push(raw.to_string());
+        v.push(joined.clone());
+        v.push(stripped.clone());
+
+        // With extensions
+        for ext in EXTS {
+            v.push(format!("{}{}", raw, ext));
+            v.push(format!("{}{}", joined, ext));
+            v.push(format!("{}{}", stripped, ext));
+        }
+
+        v
+    };
+
+    for candidate in &candidates {
+        if known_paths.contains(candidate) {
+            return candidate.clone();
+        }
+    }
+
+    // No match — store raw import as the target path
+    raw.to_string()
 }
 
 /// Returns the path to the database file, creating the `.codebones/` directory if needed.
@@ -287,6 +360,36 @@ pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
         .replace('_', "\\_");
     let like_query = format!("%{}%", escaped);
     cache.search_symbol_ids(&like_query).map_err(Into::into)
+}
+
+/// Returns all raw import strings recorded for the given file path.
+///
+/// Returns an empty vec if the file has no imports. Run `index` first to populate the cache.
+pub fn get_imports(dir: &Path, file_path: &str) -> Result<Vec<String>> {
+    let db_path = db_path(dir)?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
+    cache.init()?;
+    let pairs = cache.get_imports(file_path)?;
+    Ok(pairs.into_iter().map(|(_, raw)| raw).collect())
+}
+
+/// Returns all file paths that import the given target path.
+///
+/// Returns an empty vec if nothing imports the target. Run `index` first to populate the cache.
+pub fn get_importers(dir: &Path, file_path: &str) -> Result<Vec<String>> {
+    let db_path = db_path(dir)?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
+    cache.init()?;
+    // We need to find files that have target_path matching this file_path,
+    // but stored target_path may be the resolved path (e.g., "shared.ts")
+    // while the query uses the file's actual path.
+    cache.get_importers(file_path).map_err(Into::into)
 }
 
 /// Options that control how `pack` filters and transforms files before bundling them.

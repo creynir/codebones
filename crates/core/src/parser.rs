@@ -43,6 +43,7 @@ pub struct Symbol {
 pub struct ParsedDocument {
     pub file_path: String,
     pub symbols: Vec<Symbol>,
+    pub imports: Vec<String>,
 }
 
 /// Configuration for extracting symbols from a specific language.
@@ -359,9 +360,352 @@ pub fn parse_file(source: &str, spec: &LanguageSpec) -> ParsedDocument {
     let mut symbols = Vec::new();
     walk_tree(root_node, source.as_bytes(), spec, None, &mut symbols);
 
+    let imports = extract_imports(source, root_node, &spec.language);
+
     ParsedDocument {
         file_path: String::new(),
         symbols,
+        imports,
+    }
+}
+
+fn node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {
+    std::str::from_utf8(&source[node.start_byte()..node.end_byte()]).unwrap_or("")
+}
+
+fn strip_quotes(s: &str) -> String {
+    let s = s.trim();
+    if (s.starts_with('"') && s.ends_with('"'))
+        || (s.starts_with('\'') && s.ends_with('\''))
+        || (s.starts_with('`') && s.ends_with('`'))
+    {
+        s[1..s.len() - 1].to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+fn extract_imports(source: &str, root: Node, language: &Language) -> Vec<String> {
+    let src = source.as_bytes();
+
+    // Identify language by checking the language pointer value indirectly — we
+    // compare against the known language objects.
+    let is_typescript = *language == tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+        || *language == tree_sitter_typescript::LANGUAGE_TSX.into();
+    let is_python = *language == tree_sitter_python::LANGUAGE.into();
+    let is_rust = *language == tree_sitter_rust::LANGUAGE.into();
+    let is_go = *language == tree_sitter_go::LANGUAGE.into();
+    let is_java = *language == tree_sitter_java::LANGUAGE.into();
+    let is_c = *language == tree_sitter_c::LANGUAGE.into();
+    let is_cpp = *language == tree_sitter_cpp::LANGUAGE.into();
+    let is_csharp = *language == tree_sitter_c_sharp::LANGUAGE.into();
+    let is_ruby = *language == tree_sitter_ruby::LANGUAGE.into();
+    let is_php = *language == tree_sitter_php::LANGUAGE_PHP.into();
+    let is_swift = *language == tree_sitter_swift::LANGUAGE.into();
+
+    let mut imports = Vec::new();
+
+    let mut cursor = root.walk();
+    // We do a recursive DFS over the entire tree
+    walk_for_imports(
+        root,
+        src,
+        &mut imports,
+        is_typescript,
+        is_python,
+        is_rust,
+        is_go,
+        is_java,
+        is_c,
+        is_cpp,
+        is_csharp,
+        is_ruby,
+        is_php,
+        is_swift,
+        &mut cursor,
+    );
+
+    imports
+}
+
+#[allow(clippy::too_many_arguments)]
+fn walk_for_imports(
+    node: Node,
+    src: &[u8],
+    imports: &mut Vec<String>,
+    is_typescript: bool,
+    is_python: bool,
+    is_rust: bool,
+    is_go: bool,
+    is_java: bool,
+    is_c: bool,
+    is_cpp: bool,
+    is_csharp: bool,
+    is_ruby: bool,
+    is_php: bool,
+    is_swift: bool,
+    _cursor: &mut tree_sitter::TreeCursor,
+) {
+    let kind = node.kind();
+
+    if is_typescript {
+        // import_statement: get the source child (a string node)
+        if kind == "import_statement" {
+            if let Some(source_node) = node.child_by_field_name("source") {
+                let text = node_text(source_node, src);
+                imports.push(strip_quotes(text));
+            }
+        }
+        // call_expression where function is `require`
+        if kind == "call_expression" {
+            if let Some(func_node) = node.child_by_field_name("function") {
+                let func_text = node_text(func_node, src);
+                if func_text == "require" {
+                    if let Some(args_node) = node.child_by_field_name("arguments") {
+                        let mut c = args_node.walk();
+                        for arg in args_node.children(&mut c) {
+                            let arg_kind = arg.kind();
+                            if arg_kind == "string" {
+                                let text = node_text(arg, src);
+                                imports.push(strip_quotes(text));
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if is_python {
+        if kind == "import_statement" {
+            // get all `dotted_name` or `aliased_import` children
+            let mut c = node.walk();
+            let mut found = false;
+            for child in node.children(&mut c) {
+                let ck = child.kind();
+                if ck == "dotted_name" || ck == "aliased_import" {
+                    let text = node_text(child, src);
+                    // get just the module name (before " as ")
+                    let module = text.split(" as ").next().unwrap_or(text).trim();
+                    imports.push(module.to_string());
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                // fallback: get full text
+                let text = node_text(node, src);
+                let trimmed = text.trim_start_matches("import ").trim();
+                imports.push(trimmed.to_string());
+            }
+        } else if kind == "import_from_statement" {
+            // get module_name child
+            if let Some(module_node) = node.child_by_field_name("module_name") {
+                let text = node_text(module_node, src);
+                imports.push(text.to_string());
+            } else {
+                // relative import: look for relative_import or dotted_name children
+                let mut c = node.walk();
+                for child in node.children(&mut c) {
+                    let ck = child.kind();
+                    if ck == "relative_import" || ck == "dotted_name" {
+                        let text = node_text(child, src);
+                        imports.push(text.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    } else if is_rust {
+        if kind == "use_declaration" {
+            if let Some(arg_node) = node.child_by_field_name("argument") {
+                let text = node_text(arg_node, src);
+                imports.push(text.to_string());
+            } else {
+                // fallback: get full text minus "use " and ";"
+                let text = node_text(node, src);
+                let trimmed = text
+                    .trim_start_matches("use ")
+                    .trim_end_matches(';')
+                    .trim();
+                imports.push(trimmed.to_string());
+            }
+        } else if kind == "mod_item" {
+            // Only unnamed mods (declarations without a body)
+            let has_body = {
+                let mut c = node.walk();
+                let result = node
+                    .children(&mut c)
+                    .any(|child| child.kind() == "declaration_list");
+                result
+            };
+            if !has_body {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let text = node_text(name_node, src);
+                    imports.push(text.to_string());
+                }
+            }
+        }
+    } else if is_go {
+        if kind == "import_declaration" {
+            let mut c = node.walk();
+            for child in node.children(&mut c) {
+                if child.kind() == "import_spec" {
+                    if let Some(path_node) = child.child_by_field_name("path") {
+                        let text = node_text(path_node, src);
+                        imports.push(strip_quotes(text));
+                    }
+                } else if child.kind() == "import_spec_list" {
+                    let mut c2 = child.walk();
+                    for spec in child.children(&mut c2) {
+                        if spec.kind() == "import_spec" {
+                            if let Some(path_node) = spec.child_by_field_name("path") {
+                                let text = node_text(path_node, src);
+                                imports.push(strip_quotes(text));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } else if is_java {
+        if kind == "import_declaration" {
+            // Get full text of scoped identifier, strip leading "import " and trailing ";"
+            let text = node_text(node, src);
+            let trimmed = text
+                .trim_start_matches("import ")
+                .trim_end_matches(';')
+                .trim();
+            imports.push(trimmed.to_string());
+        }
+    } else if is_c || is_cpp {
+        if kind == "preproc_include" {
+            // Only extract string_literal (quoted includes), skip system_lib_string (angle brackets)
+            let mut c = node.walk();
+            for child in node.children(&mut c) {
+                let ck = child.kind();
+                if ck == "string_literal" {
+                    let text = node_text(child, src);
+                    imports.push(strip_quotes(text));
+                    break;
+                }
+                // system_lib_string = angle bracket includes — skip
+            }
+        }
+    } else if is_csharp {
+        if kind == "using_directive" {
+            // get name child text
+            if let Some(name_node) = node.child_by_field_name("name") {
+                let text = node_text(name_node, src);
+                imports.push(text.to_string());
+            } else {
+                // fallback: walk children for qualified_name or identifier
+                let mut c = node.walk();
+                for child in node.children(&mut c) {
+                    let ck = child.kind();
+                    if ck == "qualified_name" || ck == "identifier" || ck == "member_access_expression" {
+                        let text = node_text(child, src);
+                        imports.push(text.to_string());
+                        break;
+                    }
+                }
+            }
+        }
+    } else if is_ruby {
+        if kind == "call" {
+            // Check method name
+            let method_text = node.child_by_field_name("method")
+                .map(|n| node_text(n, src))
+                .unwrap_or("");
+            if method_text == "require" || method_text == "require_relative" {
+                if let Some(args_node) = node.child_by_field_name("arguments") {
+                    let mut c = args_node.walk();
+                    for arg in args_node.children(&mut c) {
+                        let ak = arg.kind();
+                        if ak == "string" {
+                            let text = node_text(arg, src);
+                            imports.push(strip_quotes(text));
+                            break;
+                        } else if ak == "argument_list" {
+                            let mut c2 = arg.walk();
+                            for inner in arg.children(&mut c2) {
+                                if inner.kind() == "string" {
+                                    let text = node_text(inner, src);
+                                    imports.push(strip_quotes(text));
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    } else if is_php {
+        if kind == "namespace_use_declaration" || kind == "use_declaration" {
+            // Get the namespace path
+            let mut c = node.walk();
+            for child in node.children(&mut c) {
+                let ck = child.kind();
+                if ck == "namespace_use_clause"
+                    || ck == "qualified_name"
+                    || ck == "name"
+                {
+                    let text = node_text(child, src);
+                    imports.push(text.to_string());
+                    break;
+                }
+            }
+        } else if kind == "require_expression"
+            || kind == "include_expression"
+            || kind == "require_once_expression"
+            || kind == "include_once_expression"
+        {
+            // get the string argument
+            let mut c = node.walk();
+            for child in node.children(&mut c) {
+                let ck = child.kind();
+                if ck == "string" || ck == "encapsed_string" {
+                    let text = node_text(child, src);
+                    imports.push(strip_quotes(text));
+                    break;
+                }
+            }
+        }
+    } else if is_swift && kind == "import_declaration" {
+        // Collect identifier children to form the module path
+        let mut c = node.walk();
+        let mut parts = Vec::new();
+        for child in node.children(&mut c) {
+            let ck = child.kind();
+            if ck == "identifier" || ck == "simple_identifier" {
+                parts.push(node_text(child, src).to_string());
+            }
+        }
+        if !parts.is_empty() {
+            imports.push(parts.join("."));
+        }
+    }
+
+    // Recurse into children
+    let mut c = node.walk();
+    for child in node.children(&mut c) {
+        walk_for_imports(
+            child,
+            src,
+            imports,
+            is_typescript,
+            is_python,
+            is_rust,
+            is_go,
+            is_java,
+            is_c,
+            is_cpp,
+            is_csharp,
+            is_ruby,
+            is_php,
+            is_swift,
+            &mut child.walk(),
+        );
     }
 }
 

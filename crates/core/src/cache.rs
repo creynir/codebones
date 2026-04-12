@@ -56,6 +56,23 @@ pub trait CacheStore {
 
     /// Search symbol IDs whose name matches a SQL LIKE pattern
     fn search_symbol_ids(&self, like_pattern: &str) -> rusqlite::Result<Vec<String>>;
+
+    /// Insert an import relationship: source_file_id imports target_path (raw_import is the original string)
+    fn insert_import(
+        &self,
+        source_file_id: i64,
+        target_path: &str,
+        raw_import: &str,
+    ) -> rusqlite::Result<()>;
+
+    /// Return (target_path, raw_import) for all imports of the given file path
+    fn get_imports(&self, file_path: &str) -> rusqlite::Result<Vec<(String, String)>>;
+
+    /// Return source file paths that import the given target_path
+    fn get_importers(&self, target_path: &str) -> rusqlite::Result<Vec<String>>;
+
+    /// Delete all import records for a given source file id (used before re-indexing)
+    fn delete_imports_for_file(&self, file_id: i64) -> rusqlite::Result<()>;
 }
 
 pub struct SqliteCache {
@@ -110,7 +127,15 @@ impl CacheStore for SqliteCache {
                 FOREIGN KEY(file_id) REFERENCES files(id) ON DELETE CASCADE
             );
             CREATE INDEX IF NOT EXISTS idx_symbols_file_id ON symbols(file_id);
-            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);",
+            CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
+            CREATE TABLE IF NOT EXISTS imports (
+                source_file_id INTEGER NOT NULL,
+                target_path TEXT NOT NULL,
+                raw_import TEXT NOT NULL,
+                FOREIGN KEY(source_file_id) REFERENCES files(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_imports_source ON imports(source_file_id);
+            CREATE INDEX IF NOT EXISTS idx_imports_target ON imports(target_path);",
         )?;
         Ok(())
     }
@@ -242,6 +267,60 @@ impl CacheStore for SqliteCache {
             ids.push(row?);
         }
         Ok(ids)
+    }
+
+    fn insert_import(
+        &self,
+        source_file_id: i64,
+        target_path: &str,
+        raw_import: &str,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO imports (source_file_id, target_path, raw_import) VALUES (?1, ?2, ?3)",
+            rusqlite::params![source_file_id, target_path, raw_import],
+        )?;
+        Ok(())
+    }
+
+    fn get_imports(&self, file_path: &str) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT i.target_path, i.raw_import
+             FROM imports i
+             JOIN files f ON i.source_file_id = f.id
+             WHERE f.path = ?1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![file_path])?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next()? {
+            let target: String = row.get(0)?;
+            let raw: String = row.get(1)?;
+            result.push((target, raw));
+        }
+        Ok(result)
+    }
+
+    fn get_importers(&self, target_path: &str) -> rusqlite::Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.path
+             FROM imports i
+             JOIN files f ON i.source_file_id = f.id
+             WHERE i.target_path = ?1",
+        )?;
+        let mut rows = stmt.query(rusqlite::params![target_path])?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next()? {
+            let path: String = row.get(0)?;
+            result.push(path);
+        }
+        Ok(result)
+    }
+
+    fn delete_imports_for_file(&self, file_id: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM imports WHERE source_file_id = ?1",
+            rusqlite::params![file_id],
+        )?;
+        Ok(())
     }
 }
 
