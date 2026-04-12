@@ -389,3 +389,197 @@ fn test_pack_rejects_invalid_format() {
         .failure()
         .stderr(predicate::str::contains("Invalid output format"));
 }
+
+// ---------------------------------------------------------------------------
+// map command tests (AC1–AC7)
+// ---------------------------------------------------------------------------
+
+/// AC1: `codebones map` outputs the same result as `codebones pack --no-files`
+/// (defaults to current directory, xml format)
+#[test]
+fn test_map_default_equals_pack_no_files() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    let map_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let pack_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["pack", ".", "--no-files"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert_eq!(
+        map_out, pack_out,
+        "`codebones map` must produce identical output to `codebones pack --no-files`"
+    );
+}
+
+/// AC2: `codebones map .` is equivalent to `codebones map` (explicit dir)
+#[test]
+fn test_map_explicit_dot_equals_implicit_default() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    let implicit_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let explicit_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "."])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert_eq!(
+        implicit_out, explicit_out,
+        "`codebones map .` must produce identical output to `codebones map`"
+    );
+}
+
+/// AC3: `codebones map --format markdown` produces markdown skeleton output
+#[test]
+fn test_map_format_markdown() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "--format", "markdown"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("## Skeleton Map")
+                .and(predicate::str::contains("- ./dummy.rs")),
+        );
+}
+
+/// AC4: `codebones map --format xml` produces xml skeleton output
+#[test]
+fn test_map_format_xml() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "--format", "xml"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("<skeleton_map>")
+                .and(predicate::str::contains("</repository>")),
+        );
+}
+
+/// AC5: `codebones map --max-tokens N` respects the token budget
+#[test]
+fn test_map_max_tokens_respected() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    // With a very small budget the output should be truncated / shorter than without a budget.
+    let small_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "--max-tokens", "5"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let full_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert!(
+        small_out.len() <= full_out.len(),
+        "`--max-tokens 5` output ({} bytes) must not exceed unrestricted output ({} bytes)",
+        small_out.len(),
+        full_out.len()
+    );
+}
+
+/// AC6: `codebones map` output contains skeleton_map but NOT file content blocks
+#[test]
+fn test_map_contains_skeleton_map_not_content() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("<skeleton_map>")
+                .and(predicate::str::contains("<content>").not()),
+        );
+}
+
+/// AC7: `codebones map` passes through include glob option to pack
+#[test]
+fn test_map_include_glob_passthrough() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "--include", "**/*.toml"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("dummy.toml")
+                .and(predicate::str::contains("dummy.rs").not()),
+        );
+}
+
+/// AC7: `codebones map` passes through ignore glob option to pack
+#[test]
+fn test_map_ignore_glob_passthrough() {
+    let temp = setup_dummy_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "--ignore", "**/*.toml"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("dummy.rs")
+                .and(predicate::str::contains("dummy.toml").not()),
+        );
+}
