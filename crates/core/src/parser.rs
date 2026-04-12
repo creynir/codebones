@@ -712,4 +712,304 @@ mod tests {
         let elided = elide_document(source, &doc);
         assert!(elided.starts_with("class ViewModel ..."));
     }
+
+    // ===========================================================================
+    // Import extraction — failing tests (ParsedDocument.imports not yet implemented)
+    // ===========================================================================
+
+    #[test]
+    fn test_extract_typescript_imports() {
+        let source = r#"import { useState } from 'react';
+import type { FC } from 'react';
+import './styles.css';
+const fs = require('fs');
+
+export const App: FC = () => null;
+"#;
+        let spec = get_typescript_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.contains(&"'react'".to_string())
+                || doc.imports.iter().any(|i| i.contains("react")),
+            "should extract 'react' import; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("styles.css")),
+            "should extract side-effect import; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("fs")),
+            "should extract require('fs'); got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_python_imports() {
+        let source = r#"import os
+import sys
+from pathlib import Path
+from .utils import helper
+from collections import OrderedDict
+
+def main():
+    pass
+"#;
+        let spec = get_python_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("os")),
+            "should extract 'import os'; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("pathlib")),
+            "should extract 'from pathlib import Path'; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains(".utils")),
+            "should extract relative import '.utils'; got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_rust_imports() {
+        let source = r#"use std::collections::HashMap;
+use crate::parser::parse_file;
+mod utils;
+
+pub fn run() {}
+"#;
+        let spec = get_rust_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("std::collections")),
+            "should extract use std::collections::HashMap; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("crate::parser")),
+            "should extract use crate::parser::parse_file; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("utils")),
+            "should extract mod utils; got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_go_imports() {
+        let source = r#"package main
+
+import (
+    "fmt"
+    "net/http"
+)
+
+func main() {}
+"#;
+        let spec = get_go_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("fmt")),
+            "should extract import \"fmt\"; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("net/http")),
+            "should extract import \"net/http\"; got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_java_imports() {
+        let source = r#"import java.util.List;
+import java.util.ArrayList;
+import com.example.service.UserService;
+
+public class Main {}
+"#;
+        let spec = get_java_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("java.util.List")),
+            "should extract import java.util.List; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("com.example.service.UserService")),
+            "should extract import com.example.service.UserService; got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_c_local_includes_only() {
+        let source = r#"#include "myheader.h"
+#include "utils/helper.h"
+#include <stdio.h>
+#include <stdlib.h>
+
+int main() { return 0; }
+"#;
+        let spec = get_c_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("myheader.h")),
+            "should extract #include \"myheader.h\"; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("utils/helper.h")),
+            "should extract #include \"utils/helper.h\"; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            !doc.imports.iter().any(|i| i.contains("stdio.h")),
+            "should NOT extract system include <stdio.h>; got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_csharp_using_directives() {
+        let source = r#"using System;
+using System.Collections.Generic;
+using MyApp.Services;
+
+public class Program {}
+"#;
+        let spec = get_csharp_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("System")),
+            "should extract using System; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("MyApp.Services")),
+            "should extract using MyApp.Services; got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_ruby_require_statements() {
+        let source = r#"require 'json'
+require_relative './utils/helper'
+require 'net/http'
+
+class MyClass
+  def run; end
+end
+"#;
+        let spec = get_ruby_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("json")),
+            "should extract require 'json'; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("./utils/helper")),
+            "should extract require_relative './utils/helper'; got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_php_use_and_require() {
+        let source = r#"<?php
+use App\Http\Controllers\UserController;
+use Illuminate\Support\Facades\DB;
+require 'config.php';
+include 'helpers.php';
+
+class Handler {}
+"#;
+        let spec = get_php_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("App\\Http\\Controllers\\UserController")
+                || i.contains("App/Http/Controllers/UserController")
+                || i.contains("UserController")),
+            "should extract use App\\Http\\Controllers\\UserController; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("config.php")),
+            "should extract require 'config.php'; got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_swift_import_declarations() {
+        let source = r#"import Foundation
+import UIKit
+import SwiftUI
+
+struct ContentView: View {
+    var body: some View { Text("Hello") }
+}
+"#;
+        let spec = get_swift_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("Foundation")),
+            "should extract import Foundation; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("UIKit")),
+            "should extract import UIKit; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.imports.iter().any(|i| i.contains("SwiftUI")),
+            "should extract import SwiftUI; got: {:?}",
+            doc.imports
+        );
+    }
+
+    #[test]
+    fn test_extract_cpp_local_includes_only() {
+        let source = r#"#include "engine/renderer.h"
+#include "core/math.hpp"
+#include <vector>
+#include <string>
+
+void render() {}
+"#;
+        let spec = get_cpp_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports.iter().any(|i| i.contains("engine/renderer.h")),
+            "should extract #include \"engine/renderer.h\"; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            !doc.imports.iter().any(|i| i.contains("vector")),
+            "should NOT extract system include <vector>; got: {:?}",
+            doc.imports
+        );
+    }
 }

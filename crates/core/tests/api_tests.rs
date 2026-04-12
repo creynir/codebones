@@ -1340,3 +1340,138 @@ fn pack_with_xml_special_chars_in_symbol_names() -> Result<(), Box<dyn std::erro
 
     Ok(())
 }
+
+// ===========================================================================
+// Import parsing infrastructure — failing tests
+// ===========================================================================
+
+#[test]
+fn index_populates_imports_table_for_typescript_file() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    fs::write(
+        dir.path().join("main.ts"),
+        "import { readFile } from 'fs';\nimport './styles.css';\n\nexport function main() {}\n",
+    )
+    .expect("write main.ts");
+
+    api::index(dir.path()).expect("index should succeed");
+
+    let imports: Vec<String> =
+        api::get_imports(dir.path(), "main.ts").expect("get_imports should succeed");
+    assert!(
+        !imports.is_empty(),
+        "imports table should be populated for TypeScript file after indexing; got empty list"
+    );
+    assert!(
+        imports.iter().any(|i| i.contains("fs")),
+        "should have import targeting 'fs'; got: {:?}",
+        imports
+    );
+    Ok(())
+}
+
+#[test]
+fn reindex_updates_imports_when_file_changes() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    fs::write(
+        dir.path().join("app.ts"),
+        "import { foo } from './foo';\n\nexport const x = 1;\n",
+    )
+    .expect("write initial app.ts");
+
+    api::index(dir.path()).expect("first index");
+
+    let initial_imports: Vec<String> =
+        api::get_imports(dir.path(), "app.ts").expect("initial get_imports");
+    assert!(
+        initial_imports.iter().any(|i| i.contains("foo")),
+        "initial index should record './foo' import; got: {:?}",
+        initial_imports
+    );
+
+    // Replace the import with a different one
+    fs::write(
+        dir.path().join("app.ts"),
+        "import { bar } from './bar';\n\nexport const x = 1;\n",
+    )
+    .expect("write updated app.ts");
+
+    api::index(dir.path()).expect("second index after file change");
+
+    let updated_imports: Vec<String> =
+        api::get_imports(dir.path(), "app.ts").expect("updated get_imports");
+    assert!(
+        !updated_imports.iter().any(|i| i.contains("foo")),
+        "stale './foo' import should be removed after re-index; got: {:?}",
+        updated_imports
+    );
+    assert!(
+        updated_imports.iter().any(|i| i.contains("bar")),
+        "new './bar' import should appear after re-index; got: {:?}",
+        updated_imports
+    );
+    Ok(())
+}
+
+#[test]
+fn get_imports_returns_empty_for_file_with_no_imports() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    fs::write(
+        dir.path().join("standalone.rs"),
+        "pub fn standalone() -> i32 { 42 }\n",
+    )
+    .expect("write standalone.rs");
+
+    api::index(dir.path()).expect("index");
+
+    let imports: Vec<String> =
+        api::get_imports(dir.path(), "standalone.rs").expect("get_imports should succeed");
+    assert!(
+        imports.is_empty(),
+        "file with no import statements should return empty import list; got: {:?}",
+        imports
+    );
+    Ok(())
+}
+
+#[test]
+fn get_importers_returns_files_that_import_a_given_file() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = TempDir::new().expect("failed to create tempdir");
+
+    // shared.ts is imported by both a.ts and b.ts
+    fs::write(dir.path().join("shared.ts"), "export const shared = 1;\n")
+        .expect("write shared.ts");
+    fs::write(
+        dir.path().join("a.ts"),
+        "import { shared } from './shared';\nexport const a = shared + 1;\n",
+    )
+    .expect("write a.ts");
+    fs::write(
+        dir.path().join("b.ts"),
+        "import { shared } from './shared';\nexport const b = shared + 2;\n",
+    )
+    .expect("write b.ts");
+
+    api::index(dir.path()).expect("index");
+
+    let importers: Vec<String> =
+        api::get_importers(dir.path(), "shared.ts").expect("get_importers should succeed");
+    assert_eq!(
+        importers.len(),
+        2,
+        "both a.ts and b.ts should appear as importers of shared.ts; got: {:?}",
+        importers
+    );
+    assert!(
+        importers.iter().any(|p| p.contains("a.ts")),
+        "a.ts should be listed as an importer; got: {:?}",
+        importers
+    );
+    assert!(
+        importers.iter().any(|p| p.contains("b.ts")),
+        "b.ts should be listed as an importer; got: {:?}",
+        importers
+    );
+    Ok(())
+}

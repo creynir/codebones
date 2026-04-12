@@ -699,6 +699,119 @@ mod tests {
         assert!(tables.contains(&"symbols".to_string()));
     }
 
+    // ===========================================================================
+    // imports table — failing tests (infrastructure not yet implemented)
+    // ===========================================================================
+
+    #[test]
+    fn test_imports_table_exists_after_init() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let mut stmt = cache
+            .conn
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='imports'")
+            .unwrap();
+        let tables: Vec<String> = stmt
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+
+        assert!(
+            tables.contains(&"imports".to_string()),
+            "imports table should be created by cache.init()"
+        );
+    }
+
+    #[test]
+    fn test_insert_import_and_retrieve_via_get_imports() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let file_id = cache
+            .upsert_file("src/main.ts", "hash_ts1", b"import { foo } from './utils'")
+            .unwrap();
+
+        cache
+            .insert_import(file_id, "src/utils", "import { foo } from './utils'")
+            .unwrap();
+
+        let imports = cache.get_imports("src/main.ts").unwrap();
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].0, "src/utils");
+        assert_eq!(imports[0].1, "import { foo } from './utils'");
+    }
+
+    #[test]
+    fn test_cascade_delete_imports_when_source_file_is_deleted() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let file_id = cache
+            .upsert_file("src/main.rs", "hash_rs1", b"use crate::utils;")
+            .unwrap();
+
+        cache
+            .insert_import(file_id, "crate::utils", "use crate::utils;")
+            .unwrap();
+
+        // Confirm import exists before deletion
+        let before = cache.get_imports("src/main.rs").unwrap();
+        assert_eq!(before.len(), 1);
+
+        cache.delete_file("src/main.rs").unwrap();
+
+        // After cascade delete, imports for this file_id should be gone
+        let mut stmt = cache
+            .conn
+            .prepare("SELECT COUNT(*) FROM imports WHERE source_file_id = ?")
+            .unwrap();
+        let count: i64 = stmt.query_row([file_id], |row| row.get(0)).unwrap();
+        assert_eq!(count, 0, "imports should be cascade-deleted with the file");
+    }
+
+    #[test]
+    fn test_get_imports_returns_empty_for_file_with_no_imports() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        cache
+            .upsert_file("src/standalone.rs", "hash_standalone", b"fn standalone() {}")
+            .unwrap();
+
+        let imports = cache.get_imports("src/standalone.rs").unwrap();
+        assert!(
+            imports.is_empty(),
+            "file with no imports should return empty vec"
+        );
+    }
+
+    #[test]
+    fn test_get_importers_returns_files_that_import_target() {
+        let cache = SqliteCache::new_in_memory().unwrap();
+        cache.init().unwrap();
+
+        let file_a_id = cache
+            .upsert_file("src/a.ts", "hash_a", b"import { bar } from './shared'")
+            .unwrap();
+        let file_b_id = cache
+            .upsert_file("src/b.ts", "hash_b", b"import { baz } from './shared'")
+            .unwrap();
+
+        cache
+            .insert_import(file_a_id, "src/shared", "import { bar } from './shared'")
+            .unwrap();
+        cache
+            .insert_import(file_b_id, "src/shared", "import { baz } from './shared'")
+            .unwrap();
+
+        let importers = cache.get_importers("src/shared").unwrap();
+        assert_eq!(importers.len(), 2);
+        assert!(importers.contains(&"src/a.ts".to_string()));
+        assert!(importers.contains(&"src/b.ts".to_string()));
+    }
+
     #[test]
     fn test_two_consecutive_opens_on_same_db_path_do_not_corrupt() {
         // Opening a database twice (sequentially) and calling init() both times
