@@ -41,6 +41,33 @@ pub enum Commands {
         /// Substring to match against symbol names. Pass "" to list all symbols.
         query: String,
     },
+    /// Outputs the skeleton map only (file paths + symbol signatures) — shorthand for pack --no-files
+    Map {
+        /// The directory to map (defaults to current directory)
+        #[arg(default_value = ".")]
+        dir: PathBuf,
+        /// Output format (e.g., xml, markdown)
+        #[arg(short, long, default_value = "xml")]
+        format: String,
+        /// Maximum tokens allowed in the output
+        #[arg(short, long)]
+        max_tokens: Option<usize>,
+        /// Remove all comments from the code
+        #[arg(long)]
+        remove_comments: bool,
+        /// Remove consecutive empty lines
+        #[arg(long)]
+        remove_empty_lines: bool,
+        /// Truncate long base64/hex strings in the output
+        #[arg(long)]
+        truncate_base64: bool,
+        /// Glob patterns to explicitly include (e.g., "**/*.rs")
+        #[arg(long)]
+        include: Option<Vec<String>>,
+        /// Glob patterns to ignore (e.g., "**/test_*")
+        #[arg(long)]
+        ignore: Option<Vec<String>>,
+    },
     /// Packs the repository's skeleton into a single string for LLM context
     Pack {
         /// The directory to pack (defaults to current directory)
@@ -80,6 +107,32 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Map {
+            dir,
+            format,
+            max_tokens,
+            remove_comments,
+            remove_empty_lines,
+            truncate_base64,
+            include,
+            ignore,
+        } => {
+            let result = codebones_core::api::pack(
+                &dir,
+                &format,
+                max_tokens,
+                codebones_core::api::PackOptions {
+                    no_file_summary: false,
+                    no_files: true,
+                    remove_comments,
+                    remove_empty_lines,
+                    truncate_base64,
+                    include,
+                    ignore,
+                },
+            )?;
+            println!("{}", result);
+        }
         Commands::Index { dir } => {
             codebones_core::api::index(&dir)?;
             println!("Indexing complete");

@@ -65,6 +65,26 @@ struct SearchResponse {
     results: Vec<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct MapArgs {
+    dir: String,
+    #[serde(default = "default_format")]
+    format: String,
+    max_tokens: Option<usize>,
+}
+
+fn default_format() -> String {
+    "xml".to_string()
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct MapResponse {
+    dir: String,
+    content: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct CodebonesMcpServer {
     tool_router: ToolRouter<Self>,
@@ -205,6 +225,47 @@ impl CodebonesMcpServer {
             symbol_or_path,
             content,
         }))
+    }
+
+    #[tool(
+        name = "map",
+        description = "Outputs the skeleton map only (file paths + symbol signatures) — shorthand for pack --no-files"
+    )]
+    async fn map(
+        &self,
+        Parameters(MapArgs {
+            dir,
+            format,
+            max_tokens,
+        }): Parameters<MapArgs>,
+    ) -> Result<Json<MapResponse>, ErrorData> {
+        Self::ensure_dir("map", &dir)?;
+        let content = codebones_core::api::pack(
+            Path::new(&dir),
+            &format,
+            max_tokens,
+            codebones_core::api::PackOptions {
+                no_file_summary: false,
+                no_files: true,
+                remove_comments: false,
+                remove_empty_lines: false,
+                truncate_base64: false,
+                include: None,
+                ignore: None,
+            },
+        )
+        .map_err(|error| {
+            Self::map_lookup_error(
+                "map",
+                error.to_string(),
+                rmcp::serde_json::json!({
+                    "tool": "map",
+                    "dir": dir,
+                }),
+            )
+        })?;
+
+        Ok(Json(MapResponse { dir, content }))
     }
 
     #[tool(
