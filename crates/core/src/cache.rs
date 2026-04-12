@@ -73,6 +73,9 @@ pub trait CacheStore {
 
     /// Delete all import records for a given source file id (used before re-indexing)
     fn delete_imports_for_file(&self, file_id: i64) -> rusqlite::Result<()>;
+
+    /// Return all (source_path, target_path) import pairs across the entire repository
+    fn list_all_imports(&self) -> rusqlite::Result<Vec<(String, String)>>;
 }
 
 pub struct SqliteCache {
@@ -321,6 +324,22 @@ impl CacheStore for SqliteCache {
             rusqlite::params![file_id],
         )?;
         Ok(())
+    }
+
+    fn list_all_imports(&self) -> rusqlite::Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.path, i.target_path
+             FROM imports i
+             JOIN files f ON i.source_file_id = f.id",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut result = Vec::new();
+        while let Some(row) = rows.next()? {
+            let source: String = row.get(0)?;
+            let target: String = row.get(1)?;
+            result.push((source, target));
+        }
+        Ok(result)
     }
 }
 

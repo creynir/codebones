@@ -7,6 +7,92 @@ use rmcp::{
     tool, tool_handler, tool_router, ErrorData, Json, ServerHandler,
 };
 
+fn format_graph_mcp(
+    result: &codebones_core::api::GraphResult,
+    format: &str,
+    top: Option<usize>,
+) -> String {
+    match format {
+        "json" => {
+            let files_json: Vec<String> = result
+                .files
+                .iter()
+                .map(|f| {
+                    format!(
+                        r#"{{"path":"{}","import_count":{}}}"#,
+                        f.path.replace('"', "\\\""),
+                        f.import_count
+                    )
+                })
+                .collect();
+            let edges_json: Vec<String> = result
+                .edges
+                .iter()
+                .map(|e| {
+                    format!(
+                        r#"{{"from":"{}","to":"{}"}}"#,
+                        e.from.replace('"', "\\\""),
+                        e.to.replace('"', "\\\"")
+                    )
+                })
+                .collect();
+            format!(
+                r#"{{"files":[{}],"edges":[{}]}}"#,
+                files_json.join(","),
+                edges_json.join(",")
+            )
+        }
+        "xml" => {
+            let mut out = String::from("<graph>\n<files>\n");
+            for f in &result.files {
+                out.push_str(&format!(
+                    "  <file path=\"{}\" import_count=\"{}\"/>\n",
+                    f.path.replace('&', "&amp;").replace('"', "&quot;"),
+                    f.import_count
+                ));
+            }
+            out.push_str("</files>\n<edges>\n");
+            for e in &result.edges {
+                out.push_str(&format!(
+                    "  <edge from=\"{}\" to=\"{}\"/>\n",
+                    e.from.replace('&', "&amp;").replace('"', "&quot;"),
+                    e.to.replace('&', "&amp;").replace('"', "&quot;")
+                ));
+            }
+            out.push_str("</edges>\n</graph>");
+            out
+        }
+        _ => {
+            let mut out = String::from("# Import Graph\n\n## Most Imported Files\n");
+            for f in &result.files {
+                out.push_str(&format!(
+                    "- `{}` — imported by **{}** files\n",
+                    f.path, f.import_count
+                ));
+            }
+            if top.is_none() {
+                out.push_str("\n## Import Map\n");
+                for e in &result.edges {
+                    out.push_str(&format!("- `{}` → {}\n", e.from, e.to));
+                }
+            }
+            out
+        }
+    }
+}
+
+fn format_blast_radius_mcp(file_path: &str, affected: &[String]) -> String {
+    let mut out = format!(
+        "# Blast Radius: {}\n\n## Affected Files ({})\n",
+        file_path,
+        affected.len()
+    );
+    for f in affected {
+        out.push_str(&format!("- {}\n", f));
+    }
+    out
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct IndexArgs {
@@ -76,6 +162,47 @@ struct MapArgs {
 
 fn default_format() -> String {
     "xml".to_string()
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GraphArgs {
+    dir: String,
+    #[serde(default = "default_markdown_format")]
+    format: Option<String>,
+    top: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GraphResponse {
+    dir: String,
+    content: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GraphFileArgs {
+    dir: String,
+    file: String,
+    #[serde(default = "default_depth")]
+    depth: Option<usize>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+struct GraphFileResponse {
+    dir: String,
+    file: String,
+    content: String,
+}
+
+fn default_markdown_format() -> Option<String> {
+    Some("markdown".to_string())
+}
+
+fn default_depth() -> Option<usize> {
+    Some(3)
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -266,6 +393,63 @@ impl CodebonesMcpServer {
         })?;
 
         Ok(Json(MapResponse { dir, content }))
+    }
+
+    #[tool(
+        name = "graph",
+        description = "Returns the full import dependency graph showing which files are most imported"
+    )]
+    async fn graph(
+        &self,
+        Parameters(GraphArgs { dir, format, top }): Parameters<GraphArgs>,
+    ) -> Result<Json<GraphResponse>, ErrorData> {
+        Self::ensure_dir("graph", &dir)?;
+        let format_str = format.as_deref().unwrap_or("markdown");
+        let mut result =
+            codebones_core::api::graph(Path::new(&dir)).map_err(|error| {
+                ErrorData::internal_error(
+                    format!("graph failed: {}", error),
+                    Some(rmcp::serde_json::json!({
+                        "tool": "graph",
+                        "dir": dir,
+                    })),
+                )
+            })?;
+
+        if let Some(n) = top {
+            result.files.truncate(n);
+        }
+
+        let content = format_graph_mcp(&result, format_str, top);
+        Ok(Json(GraphResponse { dir, content }))
+    }
+
+    #[tool(
+        name = "graph_file",
+        description = "Returns the blast radius for a specific file: all files that transitively import it"
+    )]
+    async fn graph_file(
+        &self,
+        Parameters(GraphFileArgs { dir, file, depth }): Parameters<GraphFileArgs>,
+    ) -> Result<Json<GraphFileResponse>, ErrorData> {
+        Self::ensure_dir("graph_file", &dir)?;
+        let max_depth = depth.unwrap_or(3);
+        let result =
+            codebones_core::api::graph_file(Path::new(&dir), &file, max_depth).map_err(
+                |error| {
+                    ErrorData::internal_error(
+                        format!("graph_file failed: {}", error),
+                        Some(rmcp::serde_json::json!({
+                            "tool": "graph_file",
+                            "dir": dir,
+                            "file": file,
+                        })),
+                    )
+                },
+            )?;
+
+        let content = format_blast_radius_mcp(&file, &result.affected_files);
+        Ok(Json(GraphFileResponse { dir, file, content }))
     }
 
     #[tool(

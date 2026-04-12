@@ -3,9 +3,36 @@ use crate::indexer::{DefaultIndexer, Indexer, IndexerOptions};
 use crate::parser::{get_spec_for_extension, parse_file};
 use crate::plugin::{OutputFormat, Packer};
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::path::Path;
+
+/// A file entry in the import graph with its inbound import count.
+#[derive(Debug, Clone)]
+pub struct GraphFile {
+    pub path: String,
+    pub import_count: usize,
+}
+
+/// A directed import edge: `from` imports `to`.
+#[derive(Debug, Clone)]
+pub struct GraphEdge {
+    pub from: String,
+    pub to: String,
+}
+
+/// Full import graph result.
+#[derive(Debug, Clone)]
+pub struct GraphResult {
+    pub files: Vec<GraphFile>,
+    pub edges: Vec<GraphEdge>,
+}
+
+/// Blast radius result for a specific file.
+#[derive(Debug, Clone)]
+pub struct BlastRadiusResult {
+    pub affected_files: Vec<String>,
+}
 
 const CODEBONES_SECTION: &str = r#"
 ## Codebones
@@ -390,6 +417,102 @@ pub fn get_importers(dir: &Path, file_path: &str) -> Result<Vec<String>> {
     // but stored target_path may be the resolved path (e.g., "shared.ts")
     // while the query uses the file's actual path.
     cache.get_importers(file_path).map_err(Into::into)
+}
+
+/// Returns the full import dependency graph for the indexed directory.
+///
+/// Files are sorted by inbound import count (descending). Edges represent `from → to` import
+/// relationships exactly as recorded in the cache.
+pub fn graph(dir: &Path) -> Result<GraphResult> {
+    let db_path = db_path(dir)?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
+    cache.init()?;
+
+    let all_paths = cache.list_file_paths()?;
+    let all_edges_raw = cache.list_all_imports()?;
+
+    // Count how many times each file appears as an import target.
+    let mut import_count: HashMap<String, usize> = HashMap::new();
+    for path in &all_paths {
+        import_count.insert(path.clone(), 0);
+    }
+    for (_, target) in &all_edges_raw {
+        let entry = import_count.entry(target.clone()).or_insert(0);
+        *entry += 1;
+    }
+
+    let mut files: Vec<GraphFile> = all_paths
+        .into_iter()
+        .map(|path| {
+            let count = import_count.get(&path).copied().unwrap_or(0);
+            GraphFile {
+                path,
+                import_count: count,
+            }
+        })
+        .collect();
+
+    // Sort by import_count descending, then by path ascending for stable ordering.
+    files.sort_by(|a, b| b.import_count.cmp(&a.import_count).then(a.path.cmp(&b.path)));
+
+    let edges: Vec<GraphEdge> = all_edges_raw
+        .into_iter()
+        .map(|(from, to)| GraphEdge { from, to })
+        .collect();
+
+    Ok(GraphResult { files, edges })
+}
+
+/// Returns the blast radius for `file_path`: all files that (transitively) import it,
+/// discovered via BFS up to `max_depth` hops on the reverse import graph.
+pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<BlastRadiusResult> {
+    let db_path = db_path(dir)?;
+    let db_path_str = db_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
+    let cache = SqliteCache::new(db_path_str)?;
+    cache.init()?;
+
+    // Build reverse adjacency map: target → set of source files that import it.
+    let all_edges = cache.list_all_imports()?;
+    let mut reverse: HashMap<String, Vec<String>> = HashMap::new();
+    for (source, target) in all_edges {
+        reverse.entry(target).or_default().push(source);
+    }
+
+    // BFS from file_path following reverse edges.
+    let mut visited: HashSet<String> = HashSet::new();
+    visited.insert(file_path.to_string());
+
+    let mut queue: VecDeque<String> = VecDeque::new();
+    queue.push_back(file_path.to_string());
+
+    let mut affected: Vec<String> = Vec::new();
+    let mut depth = 0usize;
+
+    while !queue.is_empty() && depth < max_depth {
+        let level_size = queue.len();
+        for _ in 0..level_size {
+            if let Some(current) = queue.pop_front() {
+                if let Some(importers) = reverse.get(&current) {
+                    for importer in importers {
+                        if visited.insert(importer.clone()) {
+                            affected.push(importer.clone());
+                            queue.push_back(importer.clone());
+                        }
+                    }
+                }
+            }
+        }
+        depth += 1;
+    }
+
+    Ok(BlastRadiusResult {
+        affected_files: affected,
+    })
 }
 
 /// Options that control how `pack` filters and transforms files before bundling them.

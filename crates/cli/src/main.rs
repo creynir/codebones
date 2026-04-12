@@ -68,6 +68,23 @@ pub enum Commands {
         #[arg(long)]
         ignore: Option<Vec<String>>,
     },
+    /// Shows the import dependency graph or blast radius for a specific file
+    Graph {
+        /// File to show blast radius for (omit for full graph)
+        file: Option<String>,
+        /// The directory containing the index (defaults to current directory)
+        #[arg(long, default_value = ".")]
+        dir: PathBuf,
+        /// Output format (markdown, xml, json)
+        #[arg(short, long, default_value = "markdown")]
+        format: String,
+        /// Show only the top N most-imported files
+        #[arg(long)]
+        top: Option<usize>,
+        /// Maximum blast radius depth (default: 3)
+        #[arg(long, default_value = "3")]
+        depth: usize,
+    },
     /// Packs the repository's skeleton into a single string for LLM context
     Pack {
         /// The directory to pack (defaults to current directory)
@@ -101,6 +118,127 @@ pub enum Commands {
         #[arg(long)]
         ignore: Option<Vec<String>>,
     },
+}
+
+fn format_graph(
+    result: &codebones_core::api::GraphResult,
+    format: &str,
+    top: Option<usize>,
+) -> String {
+    match format {
+        "json" => {
+            let files_json: Vec<String> = result
+                .files
+                .iter()
+                .map(|f| {
+                    format!(
+                        r#"{{"path":"{}","import_count":{}}}"#,
+                        escape_json(&f.path),
+                        f.import_count
+                    )
+                })
+                .collect();
+            let edges_json: Vec<String> = result
+                .edges
+                .iter()
+                .map(|e| {
+                    format!(
+                        r#"{{"from":"{}","to":"{}"}}"#,
+                        escape_json(&e.from),
+                        escape_json(&e.to)
+                    )
+                })
+                .collect();
+            format!(
+                r#"{{"files":[{}],"edges":[{}]}}"#,
+                files_json.join(","),
+                edges_json.join(",")
+            )
+        }
+        "xml" => {
+            let mut out = String::from("<graph>\n<files>\n");
+            for f in &result.files {
+                out.push_str(&format!(
+                    "  <file path=\"{}\" import_count=\"{}\"/>\n",
+                    escape_xml(&f.path),
+                    f.import_count
+                ));
+            }
+            out.push_str("</files>\n<edges>\n");
+            for e in &result.edges {
+                out.push_str(&format!(
+                    "  <edge from=\"{}\" to=\"{}\"/>\n",
+                    escape_xml(&e.from),
+                    escape_xml(&e.to)
+                ));
+            }
+            out.push_str("</edges>\n</graph>");
+            out
+        }
+        _ => {
+            // markdown (default)
+            let mut out = String::from("# Import Graph\n\n## Most Imported Files\n");
+            for f in &result.files {
+                out.push_str(&format!(
+                    "- `{}` — imported by **{}** files\n",
+                    f.path, f.import_count
+                ));
+            }
+            // Only include the import map if we're showing all files (no top filter)
+            if top.is_none() {
+                out.push_str("\n## Import Map\n");
+                for e in &result.edges {
+                    out.push_str(&format!("- `{}` → {}\n", e.from, e.to));
+                }
+            }
+            out
+        }
+    }
+}
+
+fn format_blast_radius(file_path: &str, affected: &[String], format: &str) -> String {
+    match format {
+        "json" => {
+            let files_json: Vec<String> = affected
+                .iter()
+                .map(|f| format!("\"{}\"", escape_json(f)))
+                .collect();
+            format!(
+                r#"{{"file":"{}","affected_files":[{}]}}"#,
+                escape_json(file_path),
+                files_json.join(",")
+            )
+        }
+        "xml" => {
+            let mut out = String::from("<blast_radius>\n");
+            out.push_str(&format!("  <file>{}</file>\n", escape_xml(file_path)));
+            out.push_str("  <affected>\n");
+            for f in affected {
+                out.push_str(&format!("    <file>{}</file>\n", escape_xml(f)));
+            }
+            out.push_str("  </affected>\n</blast_radius>");
+            out
+        }
+        _ => {
+            // markdown (default)
+            let mut out = format!("# Blast Radius: {}\n\n## Affected Files ({})\n", file_path, affected.len());
+            for f in affected {
+                out.push_str(&format!("- {}\n", f));
+            }
+            out
+        }
+    }
+}
+
+fn escape_json(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 fn main() -> anyhow::Result<()> {
@@ -152,6 +290,28 @@ fn main() -> anyhow::Result<()> {
             let results = codebones_core::api::search(&dir, &query)?;
             for res in results {
                 println!("{}", res);
+            }
+        }
+        Commands::Graph {
+            file,
+            dir,
+            format,
+            top,
+            depth,
+        } => {
+            if let Some(file_path) = file {
+                // Blast radius mode
+                let result = codebones_core::api::graph_file(&dir, &file_path, depth)?;
+                let output = format_blast_radius(&file_path, &result.affected_files, &format);
+                println!("{}", output);
+            } else {
+                // Full graph mode
+                let mut graph_result = codebones_core::api::graph(&dir)?;
+                if let Some(n) = top {
+                    graph_result.files.truncate(n);
+                }
+                let output = format_graph(&graph_result, &format, top);
+                println!("{}", output);
             }
         }
         Commands::Pack {
