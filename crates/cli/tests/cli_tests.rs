@@ -2,6 +2,8 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
+#[allow(unused_imports)]
+use serde_json;
 
 // A helper function to create a dummy repository for testing
 fn setup_dummy_repo() -> TempDir {
@@ -1203,5 +1205,114 @@ fn test_graph_file_depth_flag_limits_blast_radius() {
         stdout3.contains("a.ts"),
         "--depth 3 must include a.ts; got: {}",
         stdout3
+    );
+}
+
+// ---------------------------------------------------------------------------
+// init command — AC 8
+// ---------------------------------------------------------------------------
+
+/// AC 8 (claude detected): `codebones init --home <dir>` reports that Claude
+/// Code was detected and configured.
+#[test]
+fn init_reports_claude_code_detected_and_configured() {
+    let home = TempDir::new().unwrap();
+    fs::create_dir_all(home.path().join(".claude")).unwrap();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .args(["init", "--home", home.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+    assert!(
+        stdout.to_lowercase().contains("claude"),
+        "`codebones init` must mention Claude Code in output when detected; got: {}",
+        stdout
+    );
+}
+
+/// AC 8 (cursor detected): `codebones init --home <dir>` reports that Cursor
+/// was detected and configured.
+#[test]
+fn init_reports_cursor_detected_and_configured() {
+    let home = TempDir::new().unwrap();
+    fs::create_dir_all(home.path().join(".cursor")).unwrap();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .args(["init", "--home", home.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+    assert!(
+        stdout.to_lowercase().contains("cursor"),
+        "`codebones init` must mention Cursor in output when detected; got: {}",
+        stdout
+    );
+}
+
+/// AC 8 (both detected): When both ~/.claude/ and ~/.cursor/ exist, the output
+/// mentions both tools.
+#[test]
+fn init_reports_both_tools_when_both_detected() {
+    let home = TempDir::new().unwrap();
+    fs::create_dir_all(home.path().join(".claude")).unwrap();
+    fs::create_dir_all(home.path().join(".cursor")).unwrap();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .args(["init", "--home", home.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+    assert!(
+        stdout.to_lowercase().contains("claude"),
+        "output must mention Claude Code; got: {}",
+        stdout
+    );
+    assert!(
+        stdout.to_lowercase().contains("cursor"),
+        "output must mention Cursor; got: {}",
+        stdout
+    );
+}
+
+/// AC 8 + AC 9 (none detected): When no tools are found, init exits
+/// successfully and its output indicates no tools were found.
+#[test]
+fn init_reports_no_tools_found_when_none_detected() {
+    let home = TempDir::new().unwrap();
+    // Neither .claude nor .cursor is created
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .args(["init", "--home", home.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+    // Output should indicate nothing was found — accept any phrasing that
+    // conveys "no tools" / "none" / "not found" / "no supported".
+    let lower = stdout.to_lowercase();
+    assert!(
+        lower.contains("no") || lower.contains("none") || lower.contains("not found"),
+        "`codebones init` must report that no tools were found; got: {}",
+        stdout
     );
 }

@@ -252,6 +252,7 @@ dependencies = [
  "clap",
  "codebones-core",
  "predicates",
+ "serde_json",
  "tempfile",
 ]
 
@@ -265,6 +266,7 @@ dependencies = [
  "ignore",
  "regex",
  "rusqlite",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror 1.0.69",

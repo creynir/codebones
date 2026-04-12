@@ -5,6 +5,8 @@
 use codebones_core::api::{self, PackOptions};
 use std::fs;
 use tempfile::TempDir;
+#[allow(unused_imports)]
+use serde_json;
 
 // ---------------------------------------------------------------------------
 // Shared fixture helpers
@@ -1759,6 +1761,250 @@ fn graph_file_returns_empty_for_file_with_no_importers(
         result.affected_files.is_empty(),
         "main.ts has no importers, so blast radius must be empty; got: {:?}",
         result.affected_files
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// init command — AC 1-7, 9
+// ---------------------------------------------------------------------------
+
+/// AC 1: init detects Claude Code by checking whether ~/.claude/ exists.
+/// When ~/.claude/ is present, the function must create/update settings.json
+/// (tested separately); here we verify the call itself succeeds.
+#[test]
+fn init_succeeds_when_claude_dir_exists() -> Result<(), Box<dyn std::error::Error>> {
+    let home = TempDir::new()?;
+    fs::create_dir_all(home.path().join(".claude"))?;
+
+    api::init(home.path())?;
+
+    Ok(())
+}
+
+/// AC 2: init detects Cursor by checking whether ~/.cursor/ exists.
+#[test]
+fn init_succeeds_when_cursor_dir_exists() -> Result<(), Box<dyn std::error::Error>> {
+    let home = TempDir::new()?;
+    fs::create_dir_all(home.path().join(".cursor"))?;
+
+    api::init(home.path())?;
+
+    Ok(())
+}
+
+/// AC 3: When ~/.claude/ exists, init creates ~/.claude/settings.json with
+/// the codebones-mcp entry under `mcpServers`.
+#[test]
+fn init_creates_claude_settings_json_when_missing() -> Result<(), Box<dyn std::error::Error>> {
+    let home = TempDir::new()?;
+    fs::create_dir_all(home.path().join(".claude"))?;
+
+    api::init(home.path())?;
+
+    let settings_path = home.path().join(".claude").join("settings.json");
+    assert!(
+        settings_path.exists(),
+        "~/.claude/settings.json must be created; path: {}",
+        settings_path.display()
+    );
+
+    let content = fs::read_to_string(&settings_path)?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .expect("settings.json must contain valid JSON");
+
+    assert!(
+        json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
+        "mcpServers.codebones.command must equal \"codebones-mcp\"; got: {}",
+        json
+    );
+    assert!(
+        json["mcpServers"]["codebones"]["type"] == "stdio",
+        "mcpServers.codebones.type must equal \"stdio\"; got: {}",
+        json
+    );
+
+    Ok(())
+}
+
+/// AC 4: If ~/.claude/settings.json already has other MCP servers configured,
+/// they are preserved after init runs.
+#[test]
+fn init_preserves_existing_mcp_servers_in_claude_settings() -> Result<(), Box<dyn std::error::Error>> {
+    let home = TempDir::new()?;
+    let claude_dir = home.path().join(".claude");
+    fs::create_dir_all(&claude_dir)?;
+
+    // Pre-populate with an existing MCP server
+    let existing = serde_json::json!({
+        "mcpServers": {
+            "other-tool": {
+                "command": "other-mcp",
+                "args": [],
+                "type": "stdio"
+            }
+        }
+    });
+    fs::write(
+        claude_dir.join("settings.json"),
+        serde_json::to_string_pretty(&existing)?,
+    )?;
+
+    api::init(home.path())?;
+
+    let content = fs::read_to_string(claude_dir.join("settings.json"))?;
+    let json: serde_json::Value = serde_json::from_str(&content)?;
+
+    assert!(
+        json["mcpServers"]["other-tool"]["command"] == "other-mcp",
+        "pre-existing server 'other-tool' must be preserved; got: {}",
+        json
+    );
+    assert!(
+        json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
+        "codebones-mcp entry must also be present; got: {}",
+        json
+    );
+
+    Ok(())
+}
+
+/// AC 5: If codebones-mcp is already registered in ~/.claude/settings.json,
+/// init does not duplicate the entry.
+#[test]
+fn init_does_not_duplicate_codebones_entry_in_claude_settings() -> Result<(), Box<dyn std::error::Error>> {
+    let home = TempDir::new()?;
+    let claude_dir = home.path().join(".claude");
+    fs::create_dir_all(&claude_dir)?;
+
+    // Pre-populate with codebones already registered
+    let existing = serde_json::json!({
+        "mcpServers": {
+            "codebones": {
+                "command": "codebones-mcp",
+                "args": [],
+                "type": "stdio"
+            }
+        }
+    });
+    fs::write(
+        claude_dir.join("settings.json"),
+        serde_json::to_string_pretty(&existing)?,
+    )?;
+
+    // Run init twice
+    api::init(home.path())?;
+    api::init(home.path())?;
+
+    let content = fs::read_to_string(claude_dir.join("settings.json"))?;
+    let json: serde_json::Value = serde_json::from_str(&content)?;
+
+    // mcpServers must remain a flat object with exactly one "codebones" key
+    let mcp_servers = json["mcpServers"]
+        .as_object()
+        .expect("mcpServers must be an object");
+    assert_eq!(
+        mcp_servers.keys().filter(|k| *k == "codebones").count(),
+        1,
+        "codebones must appear exactly once in mcpServers; got: {}",
+        json
+    );
+
+    Ok(())
+}
+
+/// AC 6: When ~/.cursor/ exists, init creates ~/.cursor/mcp.json with the
+/// codebones-mcp entry under `mcpServers`.
+#[test]
+fn init_creates_cursor_mcp_json_when_missing() -> Result<(), Box<dyn std::error::Error>> {
+    let home = TempDir::new()?;
+    fs::create_dir_all(home.path().join(".cursor"))?;
+
+    api::init(home.path())?;
+
+    let mcp_path = home.path().join(".cursor").join("mcp.json");
+    assert!(
+        mcp_path.exists(),
+        "~/.cursor/mcp.json must be created; path: {}",
+        mcp_path.display()
+    );
+
+    let content = fs::read_to_string(&mcp_path)?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .expect("mcp.json must contain valid JSON");
+
+    assert!(
+        json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
+        "mcpServers.codebones.command must equal \"codebones-mcp\"; got: {}",
+        json
+    );
+    assert!(
+        json["mcpServers"]["codebones"]["type"] == "stdio",
+        "mcpServers.codebones.type must equal \"stdio\"; got: {}",
+        json
+    );
+
+    Ok(())
+}
+
+/// AC 7: Existing MCP servers in ~/.cursor/mcp.json are preserved when init runs.
+#[test]
+fn init_preserves_existing_mcp_servers_in_cursor_config() -> Result<(), Box<dyn std::error::Error>> {
+    let home = TempDir::new()?;
+    let cursor_dir = home.path().join(".cursor");
+    fs::create_dir_all(&cursor_dir)?;
+
+    let existing = serde_json::json!({
+        "mcpServers": {
+            "cursor-tool": {
+                "command": "cursor-mcp",
+                "args": [],
+                "type": "stdio"
+            }
+        }
+    });
+    fs::write(
+        cursor_dir.join("mcp.json"),
+        serde_json::to_string_pretty(&existing)?,
+    )?;
+
+    api::init(home.path())?;
+
+    let content = fs::read_to_string(cursor_dir.join("mcp.json"))?;
+    let json: serde_json::Value = serde_json::from_str(&content)?;
+
+    assert!(
+        json["mcpServers"]["cursor-tool"]["command"] == "cursor-mcp",
+        "pre-existing server 'cursor-tool' must be preserved; got: {}",
+        json
+    );
+    assert!(
+        json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
+        "codebones-mcp entry must also be present; got: {}",
+        json
+    );
+
+    Ok(())
+}
+
+/// AC 9: If no supported AI tools are found (neither ~/.claude/ nor ~/.cursor/
+/// exists), init returns Ok and does not create any files.
+#[test]
+fn init_exits_successfully_when_no_tools_detected() -> Result<(), Box<dyn std::error::Error>> {
+    let home = TempDir::new()?;
+    // Neither .claude nor .cursor directory is created
+
+    api::init(home.path())?;
+
+    // No config files should have been created
+    assert!(
+        !home.path().join(".claude").join("settings.json").exists(),
+        "settings.json must not be created when .claude/ is absent"
+    );
+    assert!(
+        !home.path().join(".cursor").join("mcp.json").exists(),
+        "mcp.json must not be created when .cursor/ is absent"
     );
 
     Ok(())
