@@ -515,6 +515,71 @@ pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<Blast
     })
 }
 
+/// Registers the codebones MCP server entry in an AI tool's config file.
+///
+/// If the file does not exist, it is created. If `mcpServers.codebones` is
+/// already present the function is a no-op (idempotent).
+fn register_mcp_server(settings_path: &Path) -> Result<()> {
+    let mut root: serde_json::Value = if settings_path.exists() {
+        let text = fs::read_to_string(settings_path)?;
+        serde_json::from_str(&text).unwrap_or(serde_json::Value::Object(Default::default()))
+    } else {
+        serde_json::Value::Object(Default::default())
+    };
+
+    // Ensure root is an object.
+    if !root.is_object() {
+        root = serde_json::Value::Object(Default::default());
+    }
+
+    // Ensure mcpServers object exists.
+    if root.get("mcpServers").is_none_or(|v| !v.is_object()) {
+        root["mcpServers"] = serde_json::Value::Object(Default::default());
+    }
+
+    // Only add the codebones entry if it isn't already there.
+    if root["mcpServers"].get("codebones").is_none() {
+        root["mcpServers"]["codebones"] = serde_json::json!({
+            "command": "codebones-mcp",
+            "args": [],
+            "type": "stdio"
+        });
+    }
+
+    let pretty = serde_json::to_string_pretty(&root)?;
+    fs::write(settings_path, pretty)?;
+    Ok(())
+}
+
+/// Registers the codebones MCP server with AI tools installed on the user's machine.
+///
+/// Checks for Claude Code (`~/.claude/`) and Cursor (`~/.cursor/`) and adds the
+/// `codebones-mcp` entry to their respective config files if they are found.
+/// Returns a list of human-readable status messages for the caller to display.
+pub fn init(home_dir: &Path) -> Result<Vec<String>> {
+    let mut messages = Vec::new();
+
+    // Check for Claude Code
+    let claude_dir = home_dir.join(".claude");
+    if claude_dir.exists() {
+        register_mcp_server(&claude_dir.join("settings.json"))?;
+        messages.push("Claude Code: registered codebones-mcp".to_string());
+    }
+
+    // Check for Cursor
+    let cursor_dir = home_dir.join(".cursor");
+    if cursor_dir.exists() {
+        register_mcp_server(&cursor_dir.join("mcp.json"))?;
+        messages.push("Cursor: registered codebones-mcp".to_string());
+    }
+
+    if messages.is_empty() {
+        messages.push("No supported AI tools found".to_string());
+    }
+
+    Ok(messages)
+}
+
 /// Options that control how `pack` filters and transforms files before bundling them.
 ///
 /// Set boolean flags to strip comments, empty lines, or long base64 blobs; use `include`/`ignore` glob lists to narrow the file set.

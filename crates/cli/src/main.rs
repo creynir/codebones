@@ -85,6 +85,12 @@ pub enum Commands {
         #[arg(long, default_value = "3")]
         depth: usize,
     },
+    /// Registers the codebones MCP server with AI tools installed on this machine
+    Init {
+        /// Override home directory (for testing)
+        #[arg(long, hide = true)]
+        home: Option<PathBuf>,
+    },
     /// Packs the repository's skeleton into a single string for LLM context
     Pack {
         /// The directory to pack (defaults to current directory)
@@ -245,6 +251,15 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::Init { home } => {
+            let home_dir = home.unwrap_or_else(|| {
+                dirs::home_dir().expect("Could not determine home directory")
+            });
+            let messages = codebones_core::api::init(&home_dir)?;
+            for msg in messages {
+                println!("{}", msg);
+            }
+        }
         Commands::Map {
             dir,
             format,
