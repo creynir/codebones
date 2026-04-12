@@ -403,6 +403,338 @@ fn outline_returns_error_for_nonexistent_file() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+// ===========================================================================
+// AC: .codebones/ migration and first-run setup (RED — these tests must fail
+//     until the implementation is updated)
+// ===========================================================================
+
+/// AC1: `index` creates the database at `.codebones/codebones.db`, not at the
+/// project root.
+#[test]
+fn test_index_creates_db_in_dot_codebones_dir() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    api::index(dir.path()).expect("index should succeed");
+
+    assert!(
+        dir.path().join(".codebones").join("codebones.db").exists(),
+        ".codebones/codebones.db must be created after indexing"
+    );
+    Ok(())
+}
+
+/// AC4: `index` creates `.codebones/` automatically when it does not exist.
+#[test]
+fn test_index_creates_dot_codebones_directory() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    // Pre-condition: directory must not exist yet.
+    assert!(
+        !dir.path().join(".codebones").exists(),
+        ".codebones/ must not exist before first index"
+    );
+
+    api::index(dir.path()).expect("index should succeed");
+
+    assert!(
+        dir.path().join(".codebones").is_dir(),
+        ".codebones/ must be created automatically by index"
+    );
+    Ok(())
+}
+
+/// AC2: `search` reads the database from `.codebones/codebones.db` after
+/// `index` has been run.
+#[test]
+fn test_search_reads_db_from_dot_codebones() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    api::index(dir.path()).expect("index should succeed");
+
+    // Confirm the db lives in .codebones/ — if it doesn't, this test is broken
+    // by the wrong reason and we want to catch that.
+    assert!(
+        dir.path().join(".codebones").join("codebones.db").exists(),
+        "pre-condition: .codebones/codebones.db must exist"
+    );
+
+    let results = api::search(dir.path(), "add").expect("search should succeed");
+    assert!(
+        !results.is_empty(),
+        "search should find symbols indexed via .codebones/codebones.db"
+    );
+    Ok(())
+}
+
+/// AC3: If an old `codebones.db` exists at the project root, `index` deletes
+/// it and creates a fresh database at `.codebones/codebones.db`.
+#[test]
+fn test_index_deletes_legacy_root_db_and_creates_new_in_dot_codebones(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    // Plant a legacy db at the root.
+    let legacy_db = dir.path().join("codebones.db");
+    fs::write(&legacy_db, b"legacy sqlite data").expect("write legacy db");
+    assert!(legacy_db.exists(), "pre-condition: legacy db must exist");
+
+    api::index(dir.path()).expect("index should succeed");
+
+    assert!(
+        !legacy_db.exists(),
+        "legacy codebones.db at root must be deleted by index"
+    );
+    assert!(
+        dir.path().join(".codebones").join("codebones.db").exists(),
+        ".codebones/codebones.db must be created after legacy db removal"
+    );
+    Ok(())
+}
+
+/// AC5 + AC6: When `.git/` exists and `.gitignore` does not, `index` creates
+/// `.gitignore` containing `.codebones/`.
+#[test]
+fn test_index_creates_gitignore_with_dot_codebones_when_git_exists(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    // Simulate a git repository (just the directory is enough for detection).
+    fs::create_dir(dir.path().join(".git")).expect("create .git dir");
+
+    // No .gitignore yet.
+    assert!(
+        !dir.path().join(".gitignore").exists(),
+        "pre-condition: .gitignore must not exist"
+    );
+
+    api::index(dir.path()).expect("index should succeed");
+
+    let gitignore_path = dir.path().join(".gitignore");
+    assert!(
+        gitignore_path.exists(),
+        ".gitignore must be created when .git/ exists"
+    );
+    let contents = fs::read_to_string(&gitignore_path)?;
+    assert!(
+        contents.contains(".codebones/"),
+        ".gitignore must contain '.codebones/' entry; got: {contents}"
+    );
+    Ok(())
+}
+
+/// AC5: When `.gitignore` already exists but lacks `.codebones/`, `index`
+/// appends the entry.
+#[test]
+fn test_index_appends_dot_codebones_to_existing_gitignore(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    fs::create_dir(dir.path().join(".git")).expect("create .git dir");
+    fs::write(dir.path().join(".gitignore"), "target/\n*.log\n")
+        .expect("write existing .gitignore");
+
+    api::index(dir.path()).expect("index should succeed");
+
+    let contents = fs::read_to_string(dir.path().join(".gitignore"))?;
+    assert!(
+        contents.contains(".codebones/"),
+        ".gitignore must contain '.codebones/' after index; got: {contents}"
+    );
+    // Original content must still be present.
+    assert!(
+        contents.contains("target/"),
+        "original .gitignore content must be preserved; got: {contents}"
+    );
+    Ok(())
+}
+
+/// AC7: When `.gitignore` already contains `.codebones/`, `index` does NOT
+/// add a duplicate entry.
+#[test]
+fn test_index_does_not_duplicate_gitignore_entry() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    fs::create_dir(dir.path().join(".git")).expect("create .git dir");
+    fs::write(dir.path().join(".gitignore"), ".codebones/\ntarget/\n")
+        .expect("write .gitignore with existing entry");
+
+    // Run index twice to stress-test idempotency.
+    api::index(dir.path()).expect("first index");
+    api::index(dir.path()).expect("second index");
+
+    let contents = fs::read_to_string(dir.path().join(".gitignore"))?;
+    let occurrences = contents.matches(".codebones/").count();
+    assert_eq!(
+        occurrences, 1,
+        ".codebones/ must appear exactly once in .gitignore; got {occurrences} occurrences"
+    );
+    Ok(())
+}
+
+/// AC8: When `.git/` does NOT exist, `index` must NOT create or modify
+/// `.gitignore`.
+#[test]
+fn test_index_does_not_touch_gitignore_without_git_dir() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    // No .git directory.
+    assert!(
+        !dir.path().join(".git").exists(),
+        "pre-condition: .git must not exist"
+    );
+
+    api::index(dir.path()).expect("index should succeed");
+
+    assert!(
+        !dir.path().join(".gitignore").exists(),
+        ".gitignore must NOT be created when there is no .git/ directory"
+    );
+    Ok(())
+}
+
+/// AC9: When `CLAUDE.md` exists, `index` appends a codebones section on first
+/// run.
+#[test]
+fn test_index_appends_to_claude_md_when_it_exists() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    let claude_md = dir.path().join("CLAUDE.md");
+    fs::write(&claude_md, "# My Project\n\nSome existing content.\n")
+        .expect("write CLAUDE.md");
+
+    api::index(dir.path()).expect("index should succeed");
+
+    let contents = fs::read_to_string(&claude_md)?;
+    assert!(
+        contents.contains("codebones"),
+        "CLAUDE.md must contain a codebones section after index; got: {contents}"
+    );
+    // Original content must still be present.
+    assert!(
+        contents.contains("My Project"),
+        "original CLAUDE.md content must be preserved; got: {contents}"
+    );
+    Ok(())
+}
+
+/// AC9 (idempotency): `index` does NOT append a duplicate codebones section
+/// to `CLAUDE.md` on repeated runs.
+#[test]
+fn test_index_does_not_duplicate_claude_md_section() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    let claude_md = dir.path().join("CLAUDE.md");
+    fs::write(&claude_md, "# My Project\n").expect("write CLAUDE.md");
+
+    api::index(dir.path()).expect("first index");
+    api::index(dir.path()).expect("second index");
+
+    let contents = fs::read_to_string(&claude_md)?;
+    // Count how many times the codebones marker appears.
+    let marker_count = contents.matches("codebones").count();
+    assert!(
+        marker_count >= 1,
+        "codebones section must be present after index; got: {contents}"
+    );
+    // A naive implementation would double-append; verify the section is not duplicated.
+    // We check there is at most one codebones header block.
+    let section_starts = contents.matches("## codebones").count()
+        + contents.matches("## Codebones").count()
+        + contents.matches("<!-- codebones -->").count();
+    assert!(
+        section_starts <= 1,
+        "codebones section must appear at most once in CLAUDE.md; found {section_starts} times"
+    );
+    Ok(())
+}
+
+/// AC10: When `AGENTS.md` exists, `index` appends a codebones section on
+/// first run.
+#[test]
+fn test_index_appends_to_agents_md_when_it_exists() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    let agents_md = dir.path().join("AGENTS.md");
+    fs::write(&agents_md, "# Agents\n\nExisting content.\n").expect("write AGENTS.md");
+
+    api::index(dir.path()).expect("index should succeed");
+
+    let contents = fs::read_to_string(&agents_md)?;
+    assert!(
+        contents.contains("codebones"),
+        "AGENTS.md must contain a codebones section after index; got: {contents}"
+    );
+    assert!(
+        contents.contains("Agents"),
+        "original AGENTS.md content must be preserved; got: {contents}"
+    );
+    Ok(())
+}
+
+/// AC10 (idempotency): `index` does NOT append a duplicate codebones section
+/// to `AGENTS.md` on repeated runs.
+#[test]
+fn test_index_does_not_duplicate_agents_md_section() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    let agents_md = dir.path().join("AGENTS.md");
+    fs::write(&agents_md, "# Agents\n").expect("write AGENTS.md");
+
+    api::index(dir.path()).expect("first index");
+    api::index(dir.path()).expect("second index");
+
+    let contents = fs::read_to_string(&agents_md)?;
+    let section_starts = contents.matches("## codebones").count()
+        + contents.matches("## Codebones").count()
+        + contents.matches("<!-- codebones -->").count();
+    assert!(
+        section_starts <= 1,
+        "codebones section must appear at most once in AGENTS.md; found {section_starts} times"
+    );
+    Ok(())
+}
+
+/// AC11: When neither `CLAUDE.md` nor `AGENTS.md` exists, `index` must NOT
+/// create either file.
+#[test]
+fn test_index_does_not_create_claude_md_or_agents_md() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    assert!(
+        !dir.path().join("CLAUDE.md").exists(),
+        "pre-condition: CLAUDE.md must not exist"
+    );
+    assert!(
+        !dir.path().join("AGENTS.md").exists(),
+        "pre-condition: AGENTS.md must not exist"
+    );
+
+    api::index(dir.path()).expect("index should succeed");
+
+    assert!(
+        !dir.path().join("CLAUDE.md").exists(),
+        "index must NOT create CLAUDE.md when it does not already exist"
+    );
+    assert!(
+        !dir.path().join("AGENTS.md").exists(),
+        "index must NOT create AGENTS.md when it does not already exist"
+    );
+    Ok(())
+}
+
 #[test]
 fn outline_handles_empty_file() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
