@@ -225,6 +225,41 @@ fn resolve_import(raw: &str, source_dir: &str, known_paths: &HashSet<String>) ->
         ".php", ".swift", ".h", ".hpp",
     ];
 
+    // Strategy 1: Python dotted absolute import (e.g. `src.core.event` → `src/core/event`)
+    // Only applies when the import contains dots but no path separators.
+    if raw.contains('.') && !raw.contains('/') && !raw.starts_with('.') {
+        let slash_path = raw.replace('.', "/");
+        let with_py = format!("{}.py", slash_path);
+        if known_paths.contains(&with_py) {
+            return with_py;
+        }
+        let with_init = format!("{}/__init__.py", slash_path);
+        if known_paths.contains(&with_init) {
+            return with_init;
+        }
+    }
+
+    // Strategy 2: Python single-dot relative import (e.g. `.event` in `src/core/tracer.py`)
+    // Only applies to imports that start with exactly one dot (not `..`).
+    if raw.starts_with('.') && !raw.starts_with("..") {
+        let base = &raw[1..]; // strip the leading dot
+        if !base.is_empty() {
+            let relative_path = if source_dir.is_empty() {
+                base.to_string()
+            } else {
+                format!("{}/{}", source_dir, base)
+            };
+            let with_py = format!("{}.py", relative_path);
+            if known_paths.contains(&with_py) {
+                return with_py;
+            }
+            let with_init = format!("{}/__init__.py", relative_path);
+            if known_paths.contains(&with_init) {
+                return with_init;
+            }
+        }
+    }
+
     // Candidates to try:
     // 1. The raw import as-is
     // 2. Joined with source_dir (for relative imports starting with ./ or ../)
