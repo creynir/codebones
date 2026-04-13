@@ -3,9 +3,9 @@
 **AST-aware code indexing for LLMs.** Token-budget packing with graceful degradation — full files when there's room, structural skeletons when there isn't.
 
 [![Crates.io](https://img.shields.io/crates/v/codebones)](https://crates.io/crates/codebones)
+[![Downloads](https://img.shields.io/crates/d/codebones)](https://crates.io/crates/codebones)
 [![PyPI](https://img.shields.io/pypi/v/codebones)](https://pypi.org/project/codebones/)
 [![License: MIT](https://img.shields.io/crates/l/codebones)](https://github.com/creynir/codebones/blob/main/LICENSE)
-[![CI](https://github.com/creynir/codebones/actions/workflows/test.yml/badge.svg)](https://github.com/creynir/codebones/actions/workflows/test.yml)
 
 <p align="center">
   <img src="assets/demo.gif" alt="codebones demo" width="800" />
@@ -25,7 +25,15 @@ The core metric: how many tokens does an AI need to orient in your codebase?
 | [temporal](https://github.com/temporalio/temporal) (833K LOC, Go) | 7,337,966 | 298,330 | **25x** |
 | [n8n](https://github.com/n8n-io/n8n) (2.07M LOC, TypeScript) | 14,945,989 | 690,544 | **22x** |
 
-`codebones map` gives an AI the complete structural overview — every file, every function signature, every class — at a fraction of the token cost of reading raw source. For targeted queries, the savings are even larger: `codebones graph src/api.rs` returns the blast radius in ~500 tokens instead of millions.
+Verified with actual API calls to Claude Sonnet and Opus on [agenthelm](https://github.com/hadywalied/agenthelm):
+
+| Task | Raw source | codebones | Input token reduction |
+|---|---:|---:|---:|
+| Project orientation | 29,307 | 8,744 | **3.5x** |
+| Impact analysis | 29,067 | 307 | **443x** |
+| Symbol retrieval | 29,525 | 1,830 | **27x** |
+
+Impact analysis is the standout — `codebones graph` returns the blast radius in ~300 tokens instead of sending the entire codebase.
 
 Full benchmark methodology and reproducible scripts in [docs/benchmarks/](docs/benchmarks/).
 
@@ -150,7 +158,7 @@ Bodies are replaced with `...`. Doc comments and signatures are preserved.
 3. **Cache** — Symbols, imports, and file contents are stored in a SQLite database (`.codebones/codebones.db`). Byte offsets enable O(1) retrieval via `substr()`.
 4. **Pack** — Assembles a Markdown or XML payload. Counts tokens with `tiktoken` (cl100k_base). When the budget is exceeded, drops file contents and keeps the skeleton map.
 
-## Speed benchmarks
+## Query performance
 
 All numbers are cold-start medians in milliseconds. Full methodology and raw data in [docs/benchmarks/](docs/benchmarks/).
 
@@ -161,16 +169,6 @@ All numbers are cold-start medians in milliseconds. Full methodology and raw dat
 | agenthelm (6.25K LOC, Python) | **4.02** | 11.93 | 484.22 | 196.19 | 58.50 |
 | temporal (833K LOC, Go) | **10.45** | 432.79 | 8,208.27 | TIMEOUT | 199.83 |
 | n8n (2.07M LOC, TypeScript) | **11.82** | 1,998.44 | TIMEOUT | TIMEOUT | 104.54 |
-
-### Indexing (symbols + imports)
-
-| Dataset | codebones | jcodemunch-mcp |
-|---|---:|---:|
-| agenthelm (6.25K LOC, Python) | **249** | 76.77 |
-| temporal (833K LOC, Go) | **18,039** | 754.05 |
-| n8n (2.07M LOC, TypeScript) | **28,570** | 8,249.67 |
-
-Index now extracts import statements across all 12 languages and builds the dependency graph. This is slower than symbol-only indexing but enables `graph` and blast radius queries.
 
 ### Context packing
 
