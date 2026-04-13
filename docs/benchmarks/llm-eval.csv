@@ -1,0 +1,13 @@
+dataset,task,model,method,input_tokens,output_tokens,total_tokens
+small,orientation,sonnet,raw_source,28807,500,29307
+small,orientation,sonnet,codebones,8166,578,8744
+small,impact_analysis,sonnet,raw_source,28801,266,29067
+small,impact_analysis,sonnet,codebones,65,242,307
+small,symbol_retrieval,sonnet,raw_source,28804,721,29525
+small,symbol_retrieval,sonnet,codebones,1071,759,1830
+small,orientation,opus,raw_source,28807,604,29411
+small,orientation,opus,codebones,8166,568,8734
+small,impact_analysis,opus,raw_source,28801,303,29104
+small,impact_analysis,opus,codebones,65,318,383
+small,symbol_retrieval,opus,raw_source,28804,582,29386
+small,symbol_retrieval,opus,codebones,1071,537,1608
