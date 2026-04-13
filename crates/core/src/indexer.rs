@@ -24,7 +24,7 @@ pub struct IndexerOptions {
 impl Default for IndexerOptions {
     fn default() -> Self {
         Self {
-            max_file_size_bytes: 10 * 1024 * 1024,
+            max_file_size_bytes: 500 * 1024,
             max_file_count: 100000,
             follow_symlinks: false,
             respect_gitignore: true,
