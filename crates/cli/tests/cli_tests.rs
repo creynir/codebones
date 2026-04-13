@@ -1364,6 +1364,320 @@ fn test_search_expand_source_contains_function_body() {
         .stdout(predicate::str::contains("println!"));
 }
 
+// ===========================================================================
+// Protective defaults — graph and map (RED — failing tests)
+//
+// AC1: `codebones graph` (no --top) defaults to top 50, not unlimited.
+// AC2: `codebones graph --top 0` overrides the default and shows ALL files.
+// AC3: `codebones graph --top 10` still works as before.
+// AC4: `codebones graph <file>` blast radius mode is NOT affected by the default.
+// AC5: `codebones map` (no --max-tokens) defaults to --max-tokens 50000.
+// AC6: `codebones map --max-tokens 0` overrides the default and returns the full skeleton.
+// AC7: `codebones map --max-tokens 8000` still works as before.
+// ===========================================================================
+
+/// Helper: create a repo with 51 TypeScript files where all 51 are imported by
+/// an entry file (so all 51 have import_count >= 1). This lets us verify that
+/// the default top=50 truncates the list while --top 0 shows all 51.
+fn setup_large_graph_repo() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    // Create 51 leaf files: leaf_00.ts … leaf_50.ts, each with import_count >= 1.
+    // A single hub file (hub.ts) imports all 51, giving each a count of 1.
+    // hub.ts itself is imported by nobody (import_count = 0).
+    let mut imports = String::new();
+    for i in 0..=50 {
+        let leaf = format!("leaf_{:02}.ts", i);
+        fs::write(
+            root.join(&leaf),
+            format!("export const leaf{} = {};\n", i, i),
+        )
+        .unwrap();
+        imports.push_str(&format!(
+            "import {{ leaf{i} }} from './leaf_{i:02}';\n",
+            i = i
+        ));
+    }
+    fs::write(root.join("hub.ts"), imports).unwrap();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["index", "."])
+        .assert()
+        .success();
+
+    temp
+}
+
+/// Helper: create a repo whose skeleton is large enough that 50 000-token budget
+/// will truncate it but the full output is larger (used for map default tests).
+fn setup_large_map_repo() -> TempDir {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    // Write 200 Rust files, each with several long function bodies.  The
+    // cumulative token count will comfortably exceed 50 000 tokens.
+    for i in 0..200 {
+        let content = format!(
+            r#"/// Module {i}
+pub fn function_a_{i}(input: &str) -> String {{
+    // {padding}
+    format!("{{}} processed by module {i}", input)
+}}
+
+pub fn function_b_{i}(x: u64, y: u64) -> u64 {{
+    // {padding}
+    x.wrapping_add(y).wrapping_mul({i} + 1)
+}}
+
+pub fn function_c_{i}(v: Vec<String>) -> Vec<String> {{
+    // {padding}
+    v.into_iter().map(|s| format!("{{}} from mod {i}", s)).collect()
+}}
+"#,
+            i = i,
+            padding = "a".repeat(200),
+        );
+        fs::write(root.join(format!("mod_{i:03}.rs", i = i)), content).unwrap();
+    }
+
+    temp
+}
+
+/// AC1: `codebones graph` without --top defaults to top 50 and does NOT show
+/// all 52 files when there are 52 indexed files with non-zero import counts.
+#[test]
+fn test_graph_default_top_is_50_not_unlimited() {
+    let temp = setup_large_graph_repo();
+    let root = temp.path();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+
+    // With 51 imported leaf files and default top=50, leaf_50.ts should NOT
+    // appear (it's cut off). If the current implementation is unlimited, all 51
+    // leaf files will be present — the test fails, proving the default is missing.
+    let leaf_count = (0..=50)
+        .filter(|i| stdout.contains(&format!("leaf_{:02}.ts", i)))
+        .count();
+
+    assert!(
+        leaf_count <= 50,
+        "default `graph` must show at most 50 files; got {} leaf files in output:\n{}",
+        leaf_count,
+        stdout
+    );
+}
+
+/// AC2: `codebones graph --top 0` overrides the default and shows ALL files,
+/// including those that would be cut off by the default top=50 limit.
+#[test]
+fn test_graph_top_zero_shows_all_files() {
+    let temp = setup_large_graph_repo();
+    let root = temp.path();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "--top", "0"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+
+    // All 51 leaf files must appear when --top 0 (unlimited) is used.
+    for i in 0..=50 {
+        let leaf = format!("leaf_{:02}.ts", i);
+        assert!(
+            stdout.contains(&leaf),
+            "--top 0 must show all files; missing {} in output:\n{}",
+            leaf,
+            stdout
+        );
+    }
+}
+
+/// AC3: `codebones graph --top 10` shows exactly 10 files (pre-existing behavior).
+#[test]
+fn test_graph_top_10_shows_ten_files() {
+    let temp = setup_large_graph_repo();
+    let root = temp.path();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "--top", "10"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+
+    let leaf_count = (0..=50)
+        .filter(|i| stdout.contains(&format!("leaf_{:02}.ts", i)))
+        .count();
+
+    assert_eq!(
+        leaf_count, 10,
+        "--top 10 must show exactly 10 leaf files; got {} in output:\n{}",
+        leaf_count,
+        stdout
+    );
+}
+
+/// AC4: `codebones graph <file>` (blast radius mode) is NOT limited by the
+/// default top=50. All affected files must appear regardless of count.
+#[test]
+fn test_graph_blast_radius_not_affected_by_default_top() {
+    // Use setup_graph_repo's 3-file fixture: db.ts is imported by both
+    // utils.ts and main.ts — its blast radius is 2 files.
+    let temp = setup_graph_repo();
+    let root = temp.path();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "src/db.ts"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+
+    // Both affected files must appear — no truncation in blast radius mode.
+    assert!(
+        stdout.contains("utils.ts"),
+        "blast radius must include utils.ts; got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("main.ts"),
+        "blast radius must include main.ts; got: {}",
+        stdout
+    );
+}
+
+/// AC5: `codebones map` without --max-tokens defaults to 50 000 tokens.
+/// On a large repo whose full output exceeds 50 000 tokens, the default output
+/// must be shorter than the full output produced by `--max-tokens 0`.
+#[test]
+fn test_map_default_max_tokens_is_50000() {
+    let temp = setup_large_map_repo();
+    let root = temp.path();
+
+    let default_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let unlimited_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "--max-tokens", "0"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert!(
+        default_out.len() < unlimited_out.len(),
+        "default `map` (implicit --max-tokens 50000) must produce a shorter output \
+         than `map --max-tokens 0` on a large repo; default={} bytes, unlimited={} bytes",
+        default_out.len(),
+        unlimited_out.len()
+    );
+}
+
+/// AC6: `codebones map --max-tokens 0` returns the full skeleton without
+/// truncation — it must include ALL files from the large fixture.
+#[test]
+fn test_map_max_tokens_zero_returns_full_output() {
+    let temp = setup_large_map_repo();
+    let root = temp.path();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "--max-tokens", "0"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+
+    // Every one of the 200 module files must appear in the full output.
+    for i in 0..200 {
+        let module = format!("mod_{:03}.rs", i);
+        assert!(
+            stdout.contains(&module),
+            "--max-tokens 0 must return full output; missing {} in output",
+            module
+        );
+    }
+}
+
+/// AC7: `codebones map --max-tokens 8000` truncates and respects the given budget
+/// (pre-existing behavior: a small budget produces shorter output than unlimited).
+#[test]
+fn test_map_explicit_max_tokens_8000_truncates() {
+    let temp = setup_large_map_repo();
+    let root = temp.path();
+
+    let small_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "--max-tokens", "8000"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let full_out = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["map", "--max-tokens", "0"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    assert!(
+        small_out.len() < full_out.len(),
+        "`map --max-tokens 8000` output ({} bytes) must be shorter than \
+         `map --max-tokens 0` ({} bytes)",
+        small_out.len(),
+        full_out.len()
+    );
+}
+
 /// `codebones search <query>` without --expand returns only symbol IDs (existing behavior).
 #[test]
 fn test_search_without_expand_returns_only_symbol_ids() {
