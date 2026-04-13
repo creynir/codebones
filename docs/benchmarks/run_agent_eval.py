@@ -39,7 +39,7 @@ if not CODEBONES.exists():
 
 MODEL = "claude-sonnet-4-6"
 RUNS_PER_TASK = 1
-MAX_TURNS = 25
+MAX_TURNS = 20
 
 client = anthropic.Anthropic()
 
@@ -105,16 +105,8 @@ def make_codebones_tools(repo_dir: str):
     """Tools an agent has with codebones."""
     return [
         {
-            "name": "codebones_map",
-            "description": "Get a structural overview of the entire codebase — every file path and function/class signature. No file contents, just the skeleton.",
-            "input_schema": {
-                "type": "object",
-                "properties": {},
-            },
-        },
-        {
             "name": "codebones_search",
-            "description": "Search for symbols (functions, classes, methods) by name substring.",
+            "description": "Search for symbols (functions, classes, methods) by name substring. Returns symbol IDs and their full source code.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -174,10 +166,10 @@ def execute_standard_tool(name: str, args: dict, repo_dir: Path) -> str:
             output = result.stdout
             # Replace absolute paths with relative
             output = output.replace(str(repo_dir) + "/", "")
-            # Truncate to prevent huge outputs
+            # Truncate to keep conversation small
             lines = output.split("\n")
-            if len(lines) > 30:
-                output = "\n".join(lines[:30]) + f"\n... ({len(lines) - 30} more lines)"
+            if len(lines) > 15:
+                output = "\n".join(lines[:15]) + f"\n... ({len(lines) - 15} more lines)"
             return output or "(no matches)"
 
         elif name == "cat":
@@ -185,8 +177,8 @@ def execute_standard_tool(name: str, args: dict, repo_dir: Path) -> str:
             if not path.exists():
                 return f"Error: {args['path']} not found"
             content = path.read_text(errors="replace")
-            if len(content) > 5000:
-                content = content[:5000] + f"\n... (truncated, {len(content)} chars total)"
+            if len(content) > 3000:
+                content = content[:3000] + f"\n... (truncated, {len(content)} chars total)"
             return content
 
         elif name == "find":
@@ -226,20 +218,20 @@ def execute_codebones_tool(name: str, args: dict, repo_dir: Path) -> str:
                 capture_output=True, text=True, timeout=120,
             )
             output = result.stdout
-            # Truncate if huge (map on large repos can be 1M+ chars)
-            if len(output) > 20000:
-                output = output[:20000] + f"\n... (truncated, {len(output)} chars total)"
+            # Truncate — map on large repos can be huge
+            if len(output) > 3000:
+                output = output[:3000] + f"\n... (truncated, {len(output)} chars total)"
             return output
 
         elif name == "codebones_search":
             result = subprocess.run(
-                [str(CODEBONES), "search", "--dir", str(repo_dir), args.get("query", "")],
+                [str(CODEBONES), "search", "--dir", str(repo_dir), args.get("query", ""), "--expand"],
                 capture_output=True, text=True, timeout=30,
             )
-            lines = result.stdout.strip().split("\n")
-            if len(lines) > 30:
-                return "\n".join(lines[:30]) + f"\n... ({len(lines) - 30} more results)"
-            return result.stdout or "(no matches)"
+            output = result.stdout
+            if len(output) > 3000:
+                output = output[:3000] + f"\n... (truncated, {len(output)} chars total)"
+            return output or "(no matches)"
 
         elif name == "codebones_get":
             result = subprocess.run(
@@ -285,11 +277,13 @@ def run_agent(system_prompt: str, user_prompt: str, tools: list,
     conversation_log.append({"role": "system", "content": system_prompt})
     conversation_log.append({"role": "user", "content": user_prompt})
 
+    import time
+
     while turns < MAX_TURNS:
         turns += 1
 
         # Retry with backoff on rate limits
-        import time
+        response = None
         for attempt in range(10):
             try:
                 response = client.messages.create(
@@ -299,16 +293,19 @@ def run_agent(system_prompt: str, user_prompt: str, tools: list,
                     tools=tools,
                     messages=messages,
                 )
-                # Brief pace between calls
-                time.sleep(5)
+                # Brief pause between calls
+                time.sleep(2)
                 break
-            except anthropic.RateLimitError as e:
-                # Parse retry-after header if available, otherwise exponential backoff
-                wait = 65 * (attempt + 1)  # just over 1 min to reset the per-minute budget
+            except anthropic.RateLimitError:
+                wait = 65 * (attempt + 1)
                 print(f"\n    (rate limited, waiting {wait}s...)", end="", flush=True)
                 time.sleep(wait)
-        else:
-            print("\n    (rate limit exceeded after retries, stopping this run)")
+            except anthropic.BadRequestError as e:
+                print(f"\n    (bad request: {e})")
+                break
+
+        if response is None:
+            print("\n    (API call failed, stopping this run)")
             break
 
         total_input += response.usage.input_tokens
@@ -390,16 +387,22 @@ def run_agent(system_prompt: str, user_prompt: str, tools: list,
 
 TASKS = [
     {
-        "name": "orientation",
-        "prompt": "Describe the architecture of this project. What are the main modules, their responsibilities, and how they relate to each other? Be specific about file paths.",
+        "name": "implement_middleware",
+        "prompt": (
+            "Add a CORS middleware to the FastAPI application that allows origins from "
+            "http://localhost:3000 and http://localhost:5173. Find where middleware is "
+            "configured, look at existing middleware examples as a pattern, and write "
+            "the code. Show me the exact file to edit and the code to add."
+        ),
     },
     {
-        "name": "impact_analysis",
-        "prompt": "I need to refactor `fastapi/routing.py`. What other files in this project would be affected by changes to that file? List them and explain the dependency chain.",
-    },
-    {
-        "name": "symbol_retrieval",
-        "prompt": "Find the `APIRouter` class, explain its main methods and how it's used by the rest of the codebase.",
+        "name": "fix_bug",
+        "prompt": (
+            "I'm getting a TypeError when using `Depends()` with an async generator "
+            "that yields None. Find the dependency resolution code, trace how generator "
+            "dependencies are handled, and identify where the bug might be. Show me "
+            "the relevant code paths."
+        ),
     },
 ]
 
@@ -438,20 +441,29 @@ def main():
                 tools = make_standard_tools(str(repo_dir))
                 executor = execute_standard_tool
                 system = (
-                    "You are analyzing the FastAPI repository (Python, ~107K LOC). "
+                    "You are working on the FastAPI repository (Python, ~107K LOC). "
                     "You have access to grep, cat, find, and ls to explore the codebase. "
-                    "Explore efficiently — don't read every file. Use grep to find what you need, "
-                    "then read specific files. Answer the question thoroughly but concisely."
+                    "Explore efficiently — use grep to find what you need, then read "
+                    "specific files. Complete the task thoroughly."
                 )
             else:
-                tools = make_codebones_tools(str(repo_dir))
-                executor = execute_codebones_tool
+                tools = make_standard_tools(str(repo_dir)) + make_codebones_tools(str(repo_dir))
+                def combined_executor(name, args, repo_dir):
+                    if name.startswith("codebones_"):
+                        return execute_codebones_tool(name, args, repo_dir)
+                    return execute_standard_tool(name, args, repo_dir)
+                executor = combined_executor
                 system = (
-                    "You are analyzing the FastAPI repository (Python, ~107K LOC). "
-                    "You have access to codebones tools for structural codebase queries. "
-                    "Use codebones_map for orientation, codebones_search to find symbols, "
-                    "codebones_get for source code, and codebones_graph for dependencies. "
-                    "Answer the question thoroughly but concisely."
+                    "You are working on the FastAPI repository (Python, ~107K LOC). "
+                    "You have access to standard tools (grep, cat, find, ls) AND codebones "
+                    "structural tools. Use the best tool for each step:\n"
+                    "- codebones_search: find functions/classes by name (returns symbol IDs)\n"
+                    "- codebones_get: read a specific function's source (not the whole file)\n"
+                    "- codebones_graph <file>: see what depends on a file before changing it\n"
+                    "- codebones_outline: see a file's structure without reading it fully\n"
+                    "- grep: find text patterns (imports, strings, config values)\n"
+                    "- cat: read small files or config files\n"
+                    "Complete the task thoroughly."
                 )
 
             run_results = []

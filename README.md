@@ -17,7 +17,7 @@ A `codebones map` of the n8n codebase (2M LOC) is **22x smaller** than the raw s
 
 ## Token savings
 
-The core metric: how many tokens does an AI need to orient in your codebase?
+### Static: codebones map vs raw source
 
 | Project | Raw source | codebones map | Reduction |
 |---|---:|---:|---:|
@@ -25,9 +25,16 @@ The core metric: how many tokens does an AI need to orient in your codebase?
 | [temporal](https://github.com/temporalio/temporal) (833K LOC, Go) | 7,337,966 | 298,330 | **25x** |
 | [n8n](https://github.com/n8n-io/n8n) (2.07M LOC, TypeScript) | 14,945,989 | 690,544 | **22x** |
 
-For targeted queries the savings are even larger — `codebones graph fastapi/routing.py` returns the blast radius in ~500 tokens instead of sending the entire codebase. Full agent eval with conversation logs in [docs/benchmarks/](docs/benchmarks/).
+### Real-world: agent eval on FastAPI
 
-Full benchmark methodology and reproducible scripts in [docs/benchmarks/](docs/benchmarks/).
+Two Claude Sonnet agents solve the same task on [FastAPI](https://github.com/tiangolo/fastapi) (107K LOC). One has only standard tools (grep, cat, find, ls). The other has standard tools plus codebones. No turn limit — agents work until done.
+
+| Task | Standard only | Standard + codebones | Tokens saved | Turns saved |
+|------|---:|---:|---:|---:|
+| Add CORS middleware | 65K tokens, 27 calls, 15 turns | 55K tokens, 23 calls, 9 turns | **1.2x** | **40%** |
+| Trace dependency bug | 144K tokens, 34 calls, 20 turns | 114K tokens, 16 calls, 10 turns | **1.3x** | **53%** |
+
+The codebones agent finishes in half the turns. `codebones search` jumps directly to symbols instead of browsing directories, and `codebones get` reads one function instead of the whole file. Full conversation logs in [docs/benchmarks/agent-eval-results/](docs/benchmarks/agent-eval-results/).
 
 ## Install
 

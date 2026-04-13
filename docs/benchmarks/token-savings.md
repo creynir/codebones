@@ -4,82 +4,138 @@ Measures how many tokens an AI agent needs to consume for common tasks — with 
 
 ## Datasets
 
-Same pinned repos as the speed benchmarks:
-
 | Label | Repo | LOC | Language | Commit |
 |---|---|---:|---|---|
 | small | [tiangolo/fastapi](https://github.com/tiangolo/fastapi) | 107,493 | Python | `eba8942c81db` |
 | medium | [temporalio/temporal](https://github.com/temporalio/temporal) | 832,991 | Go | `29a039286526` |
 | large | [n8n-io/n8n](https://github.com/n8n-io/n8n) | 2,068,515 | TypeScript | `f7a787aca81c` |
 
-## Scenarios
+## Static Scenarios
 
 ### 1. Project Orientation
 
-**Task:** "Understand the architecture of this project before making changes."
+> **Prompt:** "Describe the architecture of this project. What are the main modules, their responsibilities, and how they relate to each other? Be specific about file paths."
 
-| Metric | Without codebones | With codebones |
-|--------|-------------------|----------------|
-| Method | Read all source files | `codebones map --format markdown` |
-| What the AI sees | Every line of every file | File paths + symbol signatures |
+| Approach | What the AI receives |
+|----------|---------------------|
+| Without codebones | All source files concatenated — every line of every file |
+| With codebones | `codebones map --format markdown` — file paths + function/class signatures |
 
-**Measured:** total tokens (raw source) vs tokens (map output). Reduction ratio = map / raw.
+**Measured:** total tokens (raw source) vs tokens (map output).
 
 ### 2. Impact Analysis
 
-**Task:** "What breaks if I change this file?"
+> **Prompt:** "I need to refactor `fastapi/routing.py`. What other files in this project would be affected by changes to that file? List them and explain the dependency chain."
 
-For each dataset, pick the 3 most-imported files (via `codebones graph --top 3`). For each:
+| Approach | What the AI receives |
+|----------|---------------------|
+| Without codebones | All source files — AI must trace imports manually across the entire codebase |
+| With codebones | `codebones graph fastapi/routing.py` — affected files with dependency chains |
 
-| Metric | Without codebones | With codebones |
-|--------|-------------------|----------------|
-| Method | Read all source files (AI traces imports manually) | `codebones graph <file>` |
-| What the AI sees | Entire codebase | Affected file list only |
-
-**Measured:** total tokens (all source) vs tokens (graph output). The "without" cost is the same for every file because the AI has no way to know which files are relevant without reading them all.
+**Measured:** total tokens (all source) vs tokens (graph output).
 
 ### 3. Symbol Retrieval
 
-**Task:** "Find and read the implementation of function X."
+> **Prompt:** "Find the `APIRouter` class, explain its main methods and how it's used by the rest of the codebase."
 
-For each dataset, pick 3 known symbols. For each:
+| Approach | What the AI receives |
+|----------|---------------------|
+| Without codebones | Full content of files containing "APIRouter" |
+| With codebones | `codebones search APIRouter` + `codebones get <symbol_id>` — search results + targeted source |
 
-| Metric | Without codebones | With codebones |
-|--------|-------------------|----------------|
-| Method | Read files until found (grep + cat) | `codebones search X` + `codebones get X` |
-| What the AI sees | Full content of files containing the symbol name | Search results + targeted symbol source |
-
-**Measured:** tokens (files containing the symbol name) vs tokens (search + get output).
+**Measured:** tokens (files containing the symbol) vs tokens (search + get output).
 
 ### 4. Budget Efficiency
 
-**Task:** "Fit this project into a fixed token budget."
+> **Prompt:** "Give me enough context about this project to start contributing. I have a 16K token budget."
 
-At budgets of 8K, 16K, 32K, and 64K tokens:
+| Approach | What the AI receives |
+|----------|---------------------|
+| Without codebones | First 16K tokens of alphabetically concatenated files — hard cutoff |
+| With codebones | `codebones pack --max-tokens 16000` — skeleton map + as many file bodies as fit, prioritized by import count |
 
-| Metric | Without codebones | With codebones |
-|--------|-------------------|----------------|
-| Method | Alphabetical file dump, hard truncation at budget | `codebones pack --max-tokens N` |
-| What the AI sees | First N tokens of concatenated files | Skeleton map + as many file bodies as fit |
-
-**Measured:** number of symbols visible to the AI at each budget level. Codebones preserves the skeleton map (all symbols) even when file bodies are dropped; raw truncation loses everything after the cutoff.
+**Measured:** number of symbols visible at each budget (8K, 16K, 32K, 64K).
 
 ## Agent Eval (Real-World Benchmark)
 
-The static scenarios above count tokens but don't capture what actually happens when an AI agent works on a codebase. The agent eval runs the same tasks as multi-turn agentic conversations through the Claude API on [FastAPI](https://github.com/tiangolo/fastapi) (107K LOC, Python).
+The static scenarios above count raw tokens but don't capture what actually happens when an AI agent works on a codebase. A real agent doesn't receive one big dump — it explores iteratively, making tool calls.
 
-Two agents solve each task:
-- **Standard agent** — gets `grep`, `cat`, `find`, `ls`. Explores iteratively.
-- **Codebones agent** — gets `codebones_map`, `codebones_search`, `codebones_get`, `codebones_graph`, `codebones_outline`.
+The agent eval runs real development tasks as **multi-turn agentic conversations** through the Claude Sonnet API on [FastAPI](https://github.com/tiangolo/fastapi) (107K LOC, Python). No turn limit — agents work until done.
 
-Total tokens are measured across the full conversation (all turns, all tool calls). Every conversation is saved as a JSON log for inspection.
+### Key finding
 
-See [methodology.md](methodology.md) for the full protocol and [agent-eval-results/](agent-eval-results/) for conversation logs.
+codebones doesn't replace grep — it complements it. The most efficient agent uses both:
+
+- `codebones search` to jump directly to symbols (no directory browsing)
+- `codebones get` to read one function (not the whole file)
+- `codebones graph <file>` to check blast radius before editing
+- `grep` for text patterns (imports, strings, config values)
+- `cat` for small files
+
+### Setup
+
+Two agents get the same task:
+
+**Standard agent:**
+```
+Tools: grep, cat, find, ls
+```
+
+**Standard + codebones agent:**
+```
+Tools: grep, cat, find, ls, codebones_search, codebones_get,
+       codebones_graph, codebones_outline
+```
+
+Both agents choose their own exploration strategy.
+
+### Tasks
+
+**Task 1 — Implement middleware:**
+> "Add a CORS middleware to the FastAPI application that allows origins from http://localhost:3000 and http://localhost:5173. Find where middleware is configured, look at existing middleware examples as a pattern, and write the code."
+
+**Task 2 — Trace a bug:**
+> "I'm getting a TypeError when using `Depends()` with an async generator that yields None. Find the dependency resolution code, trace how generator dependencies are handled, and identify where the bug might be."
+
+### Results
+
+| Task | Standard only | Standard + codebones | Tokens saved | Turns saved |
+|------|---:|---:|---:|---:|
+| Implement middleware | 65K tokens, 27 calls, 15 turns | 55K tokens, 23 calls, 9 turns | **1.2x** | **40%** |
+| Trace dependency bug | 144K tokens, 34 calls, 20 turns | 114K tokens, 16 calls, 10 turns | **1.3x** | **53%** |
+
+### How the codebones agent traced the bug
+
+The agent used `codebones search` to jump through the call chain:
+
+1. `search "solve_dependencies"` → found the entry point
+2. `search "is_async_gen_callable"` → found how generator deps are detected
+3. `search "contextmanager_in_threadpool"` → found the context manager wrapper
+4. `get "solve_dependencies"` → read the full implementation
+5. `search "_solve_generator"` → found the specific generator handling code
+6. `outline "dependencies/utils.py"` → saw the full file structure
+
+Then switched to `grep` for text patterns (`asynccontextmanager`, `stack.enter`).
+
+The standard agent needed 34 calls across 20 turns of `ls` → `find` → `grep` → `cat` → `grep again` to build the same understanding.
+
+### What we measure
+
+For each conversation (all turns, all tool calls):
+- `total_input_tokens` — total tokens sent to the model across all turns
+- `total_output_tokens` — total tokens the model generated
+- `total_tokens` — input + output
+- `tool_calls` — number of tool invocations
+- `turns` — number of conversation turns
+
+### Verifiability
+
+Every conversation is saved as a JSON log in [agent-eval-results/](agent-eval-results/). Each log contains the exact system prompt, every tool call with input and output, the model's reasoning, and the final answer. Token counts come from the API `usage` field.
 
 ## Running the benchmarks
 
 ```bash
-# Prerequisites: codebones built, Python 3 with tiktoken
+# Prerequisites
 cargo build --release -p codebones
 pip install tiktoken anthropic
 
@@ -94,4 +150,4 @@ Both scripts are self-contained — they clone datasets into `lab/` at pinned co
 
 ## Token counting
 
-Tokens are counted using `tiktoken` with the `cl100k_base` encoding (same tokenizer used by codebones internally for `--max-tokens`). Character-based approximations are not used.
+Tokens are counted using `tiktoken` with the `cl100k_base` encoding (same tokenizer used by codebones internally for `--max-tokens`). For the agent eval, token counts come directly from the API response `usage` field.

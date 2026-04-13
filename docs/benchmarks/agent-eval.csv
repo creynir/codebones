@@ -1,0 +1,5 @@
+task,approach,median_input_tokens,median_output_tokens,median_total_tokens,median_tool_calls,median_turns
+implement_middleware,standard,62337,3101,65438,27,15
+implement_middleware,codebones,52005,2733,54738,23,9
+fix_bug,standard,141115,3197,144312,34,20
+fix_bug,codebones,110830,3162,113992,16,10
