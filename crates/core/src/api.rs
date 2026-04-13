@@ -329,6 +329,7 @@ fn db_path(dir: &Path) -> Result<std::path::PathBuf> {
 /// `.codebones/codebones.db` is a trust boundary: callers must ensure the database file has
 /// appropriate filesystem permissions and has not been tampered with.
 pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
+    index(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -361,6 +362,7 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
 /// `codebones.db` is a trust boundary: callers must ensure the database file has
 /// appropriate filesystem permissions and has not been tampered with.
 pub fn outline(dir: &Path, path: &str) -> Result<String> {
+    index(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -409,6 +411,7 @@ pub fn outline(dir: &Path, path: &str) -> Result<String> {
 ///
 /// Returns a list of fully-qualified symbol ID strings; an empty vec means no matches.
 pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
+    index(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -428,6 +431,7 @@ pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
 ///
 /// Returns an empty vec if the file has no imports. Run `index` first to populate the cache.
 pub fn get_imports(dir: &Path, file_path: &str) -> Result<Vec<String>> {
+    index(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -442,6 +446,7 @@ pub fn get_imports(dir: &Path, file_path: &str) -> Result<Vec<String>> {
 ///
 /// Returns an empty vec if nothing imports the target. Run `index` first to populate the cache.
 pub fn get_importers(dir: &Path, file_path: &str) -> Result<Vec<String>> {
+    index(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -459,6 +464,7 @@ pub fn get_importers(dir: &Path, file_path: &str) -> Result<Vec<String>> {
 /// Files are sorted by inbound import count (descending). Edges represent `from → to` import
 /// relationships exactly as recorded in the cache.
 pub fn graph(dir: &Path) -> Result<GraphResult> {
+    index(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -504,6 +510,7 @@ pub fn graph(dir: &Path) -> Result<GraphResult> {
 /// Returns the blast radius for `file_path`: all files that (transitively) import it,
 /// discovered via BFS up to `max_depth` hops on the reverse import graph.
 pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<BlastRadiusResult> {
+    index(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
