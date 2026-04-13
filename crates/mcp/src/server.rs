@@ -141,6 +141,8 @@ struct GetResponse {
 struct SearchArgs {
     dir: String,
     query: String,
+    #[serde(default)]
+    expand: bool,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -452,24 +454,42 @@ impl CodebonesMcpServer {
 
     #[tool(
         name = "search",
-        description = "Searches for symbols across the repository"
+        description = "Searches for symbols across the repository. Pass expand: true to include full source for each match."
     )]
     async fn search(
         &self,
-        Parameters(SearchArgs { dir, query }): Parameters<SearchArgs>,
+        Parameters(SearchArgs { dir, query, expand }): Parameters<SearchArgs>,
     ) -> Result<Json<SearchResponse>, ErrorData> {
         Self::ensure_dir("search", &dir)?;
-        let results = codebones_core::api::search(Path::new(&dir), &query).map_err(|error| {
-            Self::map_lookup_error(
-                "search",
-                error.to_string(),
-                rmcp::serde_json::json!({
-                    "tool": "search",
-                    "dir": dir,
-                    "query": query,
-                }),
-            )
-        })?;
+        let results = if expand {
+            codebones_core::api::search_expanded(Path::new(&dir), &query)
+                .map_err(|error| {
+                    Self::map_lookup_error(
+                        "search",
+                        error.to_string(),
+                        rmcp::serde_json::json!({
+                            "tool": "search",
+                            "dir": dir,
+                            "query": query,
+                        }),
+                    )
+                })?
+                .into_iter()
+                .map(|r| format!("{}\n{}", r.id, r.source))
+                .collect()
+        } else {
+            codebones_core::api::search(Path::new(&dir), &query).map_err(|error| {
+                Self::map_lookup_error(
+                    "search",
+                    error.to_string(),
+                    rmcp::serde_json::json!({
+                        "tool": "search",
+                        "dir": dir,
+                        "query": query,
+                    }),
+                )
+            })?
+        };
 
         Ok(Json(SearchResponse {
             dir,

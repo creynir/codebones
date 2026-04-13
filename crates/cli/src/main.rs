@@ -40,6 +40,9 @@ pub enum Commands {
         dir: PathBuf,
         /// Substring to match against symbol names. Pass "" to list all symbols.
         query: String,
+        /// Also return the full source code of each matching symbol
+        #[arg(long)]
+        expand: bool,
     },
     /// Outputs the skeleton map only (file paths + symbol signatures) — shorthand for pack --no-files
     Map {
@@ -304,10 +307,19 @@ fn main() -> anyhow::Result<()> {
             let result = codebones_core::api::get(&dir, &symbol_or_path)?;
             println!("{}", result);
         }
-        Commands::Search { dir, query } => {
-            let results = codebones_core::api::search(&dir, &query)?;
-            for res in results {
-                println!("{}", res);
+        Commands::Search { dir, query, expand } => {
+            if expand {
+                let results = codebones_core::api::search_expanded(&dir, &query)?;
+                for res in results {
+                    println!("{}", res.id);
+                    println!("{}", res.source);
+                    println!();
+                }
+            } else {
+                let results = codebones_core::api::search(&dir, &query)?;
+                for res in results {
+                    println!("{}", res);
+                }
             }
         }
         Commands::Graph {
