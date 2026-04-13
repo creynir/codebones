@@ -41,6 +41,10 @@ MODEL = "claude-sonnet-4-6"
 RUNS_PER_TASK = 1
 MAX_TURNS = 20
 
+_key_file = SCRIPT_DIR / "key"
+if _key_file.exists() and not os.environ.get("ANTHROPIC_API_KEY"):
+    os.environ["ANTHROPIC_API_KEY"] = _key_file.read_text().strip()
+
 client = anthropic.Anthropic()
 
 
@@ -106,7 +110,7 @@ def make_codebones_tools(repo_dir: str):
     return [
         {
             "name": "codebones_search",
-            "description": "Search for symbols (functions, classes, methods) by name substring. Returns symbol IDs and their full source code.",
+            "description": "Search for symbols (functions, classes, methods) by name substring. Returns symbol IDs. Use codebones_get to read the source of a specific symbol.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -117,7 +121,7 @@ def make_codebones_tools(repo_dir: str):
         },
         {
             "name": "codebones_get",
-            "description": "Retrieve the full source code of a specific symbol or file.",
+            "description": "Retrieve the full source code of a specific symbol by ID or read an entire file by path. Use this when you already know the exact symbol ID or file path.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -128,17 +132,18 @@ def make_codebones_tools(repo_dir: str):
         },
         {
             "name": "codebones_graph",
-            "description": "Get the import dependency graph. Without a file argument, returns all files sorted by how many other files import them. With a file argument, returns the blast radius — all files transitively affected by changing that file.",
+            "description": "Blast radius: pass a file path to see all files that transitively depend on it — everything that would break if you changed that file. Essential before refactoring.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "file": {"type": "string", "description": "Optional: specific file to get blast radius for"},
+                    "file": {"type": "string", "description": "File path to get blast radius for"},
                 },
+                "required": ["file"],
             },
         },
         {
             "name": "codebones_outline",
-            "description": "Get the skeleton of a specific file — function signatures with bodies replaced by '...'.",
+            "description": "Get the skeleton of a specific file — all function/class signatures with bodies replaced by '...'. Understand a file's structure without reading the full source.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -225,7 +230,7 @@ def execute_codebones_tool(name: str, args: dict, repo_dir: Path) -> str:
 
         elif name == "codebones_search":
             result = subprocess.run(
-                [str(CODEBONES), "search", "--dir", str(repo_dir), args.get("query", ""), "--expand"],
+                [str(CODEBONES), "search", "--dir", str(repo_dir), args.get("query", "")],
                 capture_output=True, text=True, timeout=30,
             )
             output = result.stdout
@@ -404,6 +409,15 @@ TASKS = [
             "the relevant code paths."
         ),
     },
+    {
+        "name": "refactor_impact",
+        "prompt": (
+            "I'm planning to refactor `fastapi/routing.py` to split the route handling "
+            "logic into smaller modules. Before I start, I need to know: what files "
+            "depend on routing.py? What functions from routing.py are imported elsewhere? "
+            "Give me a complete list of everything that would break and needs updating."
+        ),
+    },
 ]
 
 
@@ -457,10 +471,10 @@ def main():
                     "You are working on the FastAPI repository (Python, ~107K LOC). "
                     "You have access to standard tools (grep, cat, find, ls) AND codebones "
                     "structural tools. Use the best tool for each step:\n"
-                    "- codebones_search: find functions/classes by name (returns symbol IDs)\n"
-                    "- codebones_get: read a specific function's source (not the whole file)\n"
-                    "- codebones_graph <file>: see what depends on a file before changing it\n"
-                    "- codebones_outline: see a file's structure without reading it fully\n"
+                    "- codebones_search: find functions/classes by name — returns symbol IDs. Use codebones_get to read source.\n"
+                    "- codebones_get: read a specific symbol or file when you know the exact ID/path\n"
+                    "- codebones_graph: pass a file path to see its blast radius — all files that depend on it. Use before refactoring.\n"
+                    "- codebones_outline: see a file's structure (signatures only) without reading the full source\n"
                     "- grep: find text patterns (imports, strings, config values)\n"
                     "- cat: read small files or config files\n"
                     "Complete the task thoroughly."

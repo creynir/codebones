@@ -478,13 +478,6 @@ pub fn outline(dir: &Path, path: &str) -> Result<String> {
     anyhow::bail!("Path not found: {}", path)
 }
 
-/// A search result containing a symbol's ID and its full source code.
-#[derive(Debug, Clone)]
-pub struct SearchResult {
-    pub id: String,
-    pub source: String,
-}
-
 /// Searches the cache for symbol IDs whose name contains `query` (substring match).
 ///
 /// Returns a list of fully-qualified symbol ID strings; an empty vec means no matches.
@@ -503,39 +496,6 @@ pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
         .replace('_', "\\_");
     let like_query = format!("%{}%", escaped);
     cache.search_symbol_ids(&like_query).map_err(Into::into)
-}
-
-/// Searches the cache for symbols matching `query` and returns each match's ID and full source.
-///
-/// Returns an empty vec when nothing matches. Run `index` first to populate the cache.
-pub fn search_expanded(dir: &Path, query: &str) -> Result<Vec<SearchResult>> {
-    ensure_fresh(dir)?;
-    let db_path = db_path(dir)?;
-    let db_path_str = db_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
-    let cache = SqliteCache::new(db_path_str)?;
-    cache.init()?;
-
-    let escaped = query
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    let like_query = format!("%{}%", escaped);
-    let ids = cache.search_symbol_ids(&like_query)?;
-
-    let mut results = Vec::new();
-    for id in ids {
-        if let Some(content) = cache.get_symbol_content(&id)? {
-            results.push(SearchResult {
-                id,
-                source: String::from_utf8_lossy(&content).to_string(),
-            });
-        }
-    }
-    // Sort so that IDs with an exact (case-sensitive) match on query come first.
-    results.sort_by_key(|r| if r.id.contains(query) { 0usize } else { 1usize });
-    Ok(results)
 }
 
 /// Returns all raw import strings recorded for the given file path.

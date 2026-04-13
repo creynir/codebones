@@ -1314,58 +1314,7 @@ fn init_reports_no_tools_found_when_none_detected() {
 }
 
 // ===========================================================================
-// CLI: search --expand flag
-// ===========================================================================
-
-/// `codebones search <query> --expand` outputs both the symbol ID and source code.
-#[test]
-fn test_search_expand_returns_id_and_source() {
-    let temp = setup_dummy_repo();
-
-    // Index first so the DB exists.
-    Command::cargo_bin("codebones")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["index", "."])
-        .assert()
-        .success();
-
-    Command::cargo_bin("codebones")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["search", "hello_world", "--expand"])
-        .assert()
-        .success()
-        .stdout(
-            predicate::str::contains("hello_world")
-                .and(predicate::str::contains("pub fn")),
-        );
-}
-
-/// `codebones search <query> --expand` includes the actual function body in output.
-#[test]
-fn test_search_expand_source_contains_function_body() {
-    let temp = setup_dummy_repo();
-
-    Command::cargo_bin("codebones")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["index", "."])
-        .assert()
-        .success();
-
-    Command::cargo_bin("codebones")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["search", "hello_world", "--expand"])
-        .assert()
-        .success()
-        // The function body must appear — not just the signature.
-        .stdout(predicate::str::contains("println!"));
-}
-
-// ===========================================================================
-// Protective defaults — graph and map (RED — failing tests)
+// Protective defaults — graph and map
 //
 // AC1: `codebones graph` (no --top) defaults to top 50, not unlimited.
 // AC2: `codebones graph --top 0` overrides the default and shows ALL files.
@@ -1678,39 +1627,3 @@ fn test_map_explicit_max_tokens_8000_truncates() {
     );
 }
 
-/// `codebones search <query>` without --expand returns only symbol IDs (existing behavior).
-#[test]
-fn test_search_without_expand_returns_only_symbol_ids() {
-    let temp = setup_dummy_repo();
-
-    Command::cargo_bin("codebones")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["index", "."])
-        .assert()
-        .success();
-
-    let output = Command::cargo_bin("codebones")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["search", "hello_world"])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-
-    let stdout = String::from_utf8_lossy(&output);
-    // Must contain the symbol ID.
-    assert!(
-        stdout.contains("hello_world"),
-        "search without --expand must still return the symbol ID; got: {}",
-        stdout
-    );
-    // Must NOT contain source code keywords that would only appear with --expand.
-    assert!(
-        !stdout.contains("println!"),
-        "search without --expand must not include function body source; got: {}",
-        stdout
-    );
-}
