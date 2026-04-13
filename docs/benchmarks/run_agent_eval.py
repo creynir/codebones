@@ -121,11 +121,12 @@ def make_codebones_tools(repo_dir: str):
         },
         {
             "name": "codebones_get",
-            "description": "Retrieve the full source code of a specific symbol by ID or read an entire file by path. Use this when you already know the exact symbol ID or file path.",
+            "description": "Retrieve source code of a symbol or file. Pass --filter with a keyword to get only the signature + lines matching that keyword (with 1 line of context). Without filter, returns full source. Use filter when tracing specific behavior — it's much cheaper than reading the full function.",
             "input_schema": {
                 "type": "object",
                 "properties": {
                     "symbol_or_path": {"type": "string", "description": "Symbol ID (e.g. 'src/main.py::MyClass.method') or file path"},
+                    "filter": {"type": "string", "description": "Optional: keyword to filter lines. Returns signature + matching lines only."},
                 },
                 "required": ["symbol_or_path"],
             },
@@ -239,10 +240,10 @@ def execute_codebones_tool(name: str, args: dict, repo_dir: Path) -> str:
             return output or "(no matches)"
 
         elif name == "codebones_get":
-            result = subprocess.run(
-                [str(CODEBONES), "get", "--dir", str(repo_dir), args["symbol_or_path"]],
-                capture_output=True, text=True, timeout=30,
-            )
+            cmd = [str(CODEBONES), "get", "--dir", str(repo_dir), args["symbol_or_path"]]
+            if args.get("filter"):
+                cmd.extend(["--filter", args["filter"]])
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             return result.stdout or result.stderr or "(not found)"
 
         elif name == "codebones_graph":
@@ -542,8 +543,8 @@ def main():
                     "You have access to standard tools (grep, cat, find, ls) AND codebones "
                     "structural tools. Use the best tool for each step:\n"
                     "- codebones_search: find functions/classes by name — returns symbol IDs\n"
-                    "- codebones_outline: understand what a file does — shows all signatures and structure. Use this FIRST to understand code before reading it fully.\n"
-                    "- codebones_get: read the exact source of ONE specific function. Only use when you need the implementation detail, not to understand flow.\n"
+                    "- codebones_outline: understand what a file does — shows all signatures and structure\n"
+                    "- codebones_get: read a symbol's source. Pass filter='keyword' to get only matching lines (much cheaper). Without filter returns full source.\n"
                     "- codebones_graph: blast radius — pass a file path to see all files that depend on it. Use before refactoring.\n"
                     "- grep: find text patterns (imports, strings, config values)\n"
                     "- cat: read small files or config files\n"

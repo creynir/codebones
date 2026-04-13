@@ -3,19 +3,19 @@
   "approach": "codebones",
   "run": 1,
   "prompt": "I'm planning to refactor `fastapi/routing.py` to split the route handling logic into smaller modules. Before I start, I need to know: what files depend on routing.py? What functions from routing.py are imported elsewhere? Give me a complete list of everything that would break and needs updating.",
-  "system": "You are working on the FastAPI repository (Python, ~107K LOC). You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs. Use codebones_get to read source.\n- codebones_get: read a specific symbol or file when you know the exact ID/path\n- codebones_graph: pass a file path to see its blast radius \u2014 all files that depend on it. Use before refactoring.\n- codebones_outline: see a file's structure (signatures only) without reading the full source\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly.",
+  "system": "You are working on the fastapi repository. You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs\n- codebones_outline: understand what a file does \u2014 shows all signatures and structure\n- codebones_get: read a symbol's source. Pass filter='keyword' to get only matching lines (much cheaper). Without filter returns full source.\n- codebones_graph: blast radius \u2014 pass a file path to see all files that depend on it. Use before refactoring.\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly.",
   "metrics": {
-    "total_input_tokens": 158435,
-    "total_output_tokens": 5456,
-    "total_tokens": 163891,
-    "tool_calls": 41,
-    "turns": 17
+    "total_input_tokens": 28110,
+    "total_output_tokens": 3024,
+    "total_tokens": 31134,
+    "tool_calls": 14,
+    "turns": 6
   },
-  "final_answer": "Now I have everything needed for a complete picture. Let me compile the full analysis:\n\n---\n\n## Complete Blast Radius: `fastapi/routing.py`\n\nHere is every file, symbol, and import that will break \u2014 organized by layer.\n\n---\n\n### \ud83d\udd34 Layer 1: Core FastAPI Internal Consumers (Most Critical)\n\n#### **`fastapi/applications.py`**\nThis is the deepest dependency. It consumes `routing` as a **module-level namespace** (`from fastapi import routing`) and references the following symbols via `routing.<Symbol>` in **~20+ locations**:\n\n| Symbol Used | Occurrences | Context |\n|---|---|---|\n| `routing.APIRouter` | 5+ | Type annotations, `self.router`, webhooks, `include_router()` |\n| `routing.APIRoute` | 10+ | Type annotations on every HTTP verb decorator (`get`, `post`, `put`, etc.) for `generate_unique_id_function` parameter |\n\n**Impact:** Every HTTP verb decorator signature in `FastAPI` (`get`, `post`, `put`, `patch`, `delete`, `options`, `head`, `trace`, `websocket`) references `routing.APIRoute`. Moving or renaming these classes **breaks every type annotation** in `applications.py`.\n\n---\n\n#### **`fastapi/openapi/utils.py`**\nAlso imports `routing` as a module (`from fastapi import routing`). Uses:\n\n| Symbol Used | Occurrences | Context |\n|---|---|---|\n| `routing.APIRoute` | 6 | Function signatures for OpenAPI generation, `isinstance()` checks for route/webhook inspection |\n\n**Impact:** All OpenAPI schema generation logic \u2014 `generate_operation_summary`, `generate_operation_id`, and the route-walking loop in the top-level schema builder \u2014 breaks if `APIRoute` moves.\n\n---\n\n### \ud83d\udfe0 Layer 2: Test Suite (Direct `from fastapi.routing import` statements)\n\nThese 3 test files import **directly from `fastapi.routing`** by name \u2014 the most fragile kind of import:\n\n| File | Symbols Imported |\n|---|---|\n| `tests/test_generate_unique_id_function.py` | `APIRoute` |\n| `tests/test_route_scope.py` | `APIRoute`, `APIWebSocketRoute` |\n| `tests/test_custom_route_class.py` | `APIRoute` |\n\nAll three will ra",
+  "final_answer": "Now I have a complete picture. Let me compile everything into a definitive answer.\n\n---\n\n## Complete Blast Radius for `fastapi/routing.py`\n\nHere is everything that would break and needs updating, organized by category.\n\n---\n\n### \ud83d\udce6 1. `fastapi/__init__.py` \u2014 Public API Re-export\n\n**File:** `fastapi/__init__.py`\n\n```python\nfrom .routing import APIRouter as APIRouter\n```\n\n`APIRouter` is part of FastAPI's **top-level public API** (`import fastapi; fastapi.APIRouter`). This is the highest-severity dependency \u2014 breaking it breaks every single FastAPI user.\n\n**Symbol exported:** `APIRouter`\n\n---\n\n### \ud83c\udfdb\ufe0f 2. `fastapi/applications.py` \u2014 Core `FastAPI` Class\n\n**File:** `fastapi/applications.py`\n\nThis imports the entire module by reference:\n```python\nfrom fastapi import routing\n```\n\nIt then uses **three symbols** via `routing.<name>` in **15+ method signatures and property references** throughout the `FastAPI` class:\n\n| Symbol | Usage locations |\n|---|---|\n| `routing.APIRouter` | Constructor (`self.router`, `webhooks`), type annotations in `include_router()`, `__init__` params \u2014 **9+ occurrences** |\n| `routing.APIRoute` | Type param for `generate_unique_id_function: Callable[[routing.APIRoute], str]` \u2014 **8+ occurrences** across HTTP verb decorators (`get`, `post`, `put`, `delete`, `patch`, `options`, `head`, `trace`) |\n\nThis file would need every `routing.APIRouter` and `routing.APIRoute` reference updated to the new module path(s).\n\n---\n\n### \ud83e\uddea 3. Test Files \u2014 Direct Imports\n\nThree test files directly import from `fastapi.routing`:\n\n| File | Symbols Imported |\n|---|---|\n| `tests/test_generate_unique_id_function.py` | `APIRoute` |\n| `tests/test_route_scope.py` | `APIRoute`, `APIWebSocketRoute` |\n| `tests/test_custom_route_class.py` | `APIRoute` |\n\n**Unique symbols imported across tests:** `APIRoute`, `APIWebSocketRoute`\n\n---\n\n### \ud83d\udcda 4. Documentation Source Tutorials \u2014 Direct Imports\n\nSeven `docs_src` tutorial files directly import `APIRoute` from `fastapi.routing`:\n\n| File | Symb",
   "conversation_log": [
     {
       "role": "system",
-      "content": "You are working on the FastAPI repository (Python, ~107K LOC). You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs. Use codebones_get to read source.\n- codebones_get: read a specific symbol or file when you know the exact ID/path\n- codebones_graph: pass a file path to see its blast radius \u2014 all files that depend on it. Use before refactoring.\n- codebones_outline: see a file's structure (signatures only) without reading the full source\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly."
+      "content": "You are working on the fastapi repository. You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs\n- codebones_outline: understand what a file does \u2014 shows all signatures and structure\n- codebones_get: read a symbol's source. Pass filter='keyword' to get only matching lines (much cheaper). Without filter returns full source.\n- codebones_graph: blast radius \u2014 pass a file path to see all files that depend on it. Use before refactoring.\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly."
     },
     {
       "role": "user",
@@ -23,7 +23,7 @@
     },
     {
       "role": "assistant",
-      "content": "I'll run a comprehensive parallel analysis \u2014 blast radius, imports, and symbol references all at once."
+      "content": "I'll run a comprehensive blast radius analysis in parallel \u2014 dependency graph, all imports of routing.py, and its full structure at once."
     },
     {
       "role": "tool_call",
@@ -35,6 +35,16 @@
     },
     {
       "role": "tool_call",
+      "tool": "grep",
+      "input": {
+        "pattern": "from fastapi(\\.routing| import routing)",
+        "path": ".",
+        "include": "*.py"
+      },
+      "output_preview": "(no matches)"
+    },
+    {
+      "role": "tool_call",
       "tool": "codebones_outline",
       "input": {
         "path": "fastapi/routing.py"
@@ -42,35 +52,25 @@
       "output_preview": "import contextlib\nimport email.message\nimport functools\nimport inspect\nimport json\nimport types\nfrom collections.abc import (\n    AsyncIterator,\n    Awaitable,\n    Callable,\n    Collection,\n    Corout..."
     },
     {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi\\.routing import|from fastapi import.*routing|import fastapi\\.routing",
-        "path": ".",
-        "include": "*.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
       "role": "assistant",
-      "content": "The blast radius tool showed 0 direct file-level dependents, but that's almost certainly because `routing.py` is re-exported via `fastapi/__init__.py`. Let me dig deeper into all the real import paths."
+      "content": "Good \u2014 now let me dig deeper: get all specific symbols imported from `fastapi.routing` across the whole codebase, check `fastapi/__init__.py` (the main public API re-exporter), and scan tests and docs too."
     },
     {
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "from fastapi.routing import|from fastapi import.*APIRouter|from fastapi import.*APIRoute|from fastapi import.*routing",
+        "pattern": "from fastapi\\.routing import",
         "path": ".",
         "include": "*.py"
       },
-      "output_preview": "(no matches)"
+      "output_preview": "tests/test_generate_unique_id_function.py:4:from fastapi.routing import APIRoute\ntests/test_route_scope.py:3:from fastapi.routing import APIRoute, APIWebSocketRoute\ntests/test_custom_route_class.py:3:..."
     },
     {
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "APIRouter|APIRoute|APIWebSocketRoute|get_request_handler|get_websocket_app|serialize_response|run_endpoint_function|request_response|websocket_session",
-        "path": "fastapi",
+        "pattern": "fastapi\\.routing\\.",
+        "path": ".",
         "include": "*.py"
       },
       "output_preview": "(no matches)"
@@ -84,38 +84,23 @@
       "output_preview": "\"\"\"FastAPI framework, high performance, easy to learn, fast to code, ready for production\"\"\"\n\n__version__ = \"0.135.3\"\n\nfrom starlette import status as status\n\nfrom .applications import FastAPI as Fast..."
     },
     {
+      "role": "assistant",
+      "content": "Now let me check the `fastapi/applications.py` file (which almost certainly uses routing heavily) and also scan for any other variant import patterns and the full set of docs_src tutorial variants:"
+    },
+    {
       "role": "tool_call",
-      "tool": "grep",
+      "tool": "codebones_outline",
       "input": {
-        "pattern": "APIRouter|APIRoute|APIWebSocketRoute|get_request_handler|get_websocket_app|serialize_response|run_endpoint_function|request_response|websocket_session|_merge_lifespan|_DefaultLifespan|_endpoint_context_cache|_extract_endpoint_context|_build_response_args",
         "path": "fastapi/applications.py"
       },
-      "output_preview": "(no matches)"
+      "output_preview": "from collections.abc import Awaitable, Callable, Coroutine, Sequence\nfrom enum import Enum\nfrom typing import Annotated, Any, TypeVar\n\nfrom annotated_doc import Doc\nfrom fastapi import routing\nfrom fa..."
     },
     {
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "routing",
-        "path": "fastapi/applications.py"
-      },
-      "output_preview": "fastapi/applications.py:6:from fastapi import routing\nfastapi/applications.py:38:from starlette.routing import BaseRoute\nfastapi/applications.py:713:            routing.APIRouter | None,\nfastapi/appli..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "find",
-      "input": {
-        "path": ".",
-        "name": "*.py"
-      },
-      "output_preview": "tests/test_request_params/__init__.py\ntests/test_request_params/test_cookie/test_list.py\ntests/test_request_params/test_cookie/__init__.py\ntests/test_request_params/test_cookie/test_required_str.py\nte..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi\\.routing import|from fastapi import routing|import fastapi\\.routing|fastapi\\.routing\\.",
-        "path": ".",
+        "pattern": "from fastapi\\.routing import|import fastapi\\.routing",
+        "path": "docs_src",
         "include": "*.py"
       },
       "output_preview": "(no matches)"
@@ -124,299 +109,76 @@
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "routing\\.APIRouter|routing\\.APIRoute|routing\\.APIWebSocketRoute|routing\\.get_request_handler|routing\\.serialize_response|routing\\.get_websocket_app|routing\\.run_endpoint_function|routing\\.request_response|routing\\.websocket_session",
-        "path": ".",
-        "include": "*.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "routing",
+        "pattern": "from \\.routing import|from fastapi\\.routing import",
         "path": "fastapi",
         "include": "*.py"
       },
-      "output_preview": "fastapi/applications.py:6:from fastapi import routing\nfastapi/applications.py:38:from starlette.routing import BaseRoute\nfastapi/applications.py:713:            routing.APIRouter | None,\nfastapi/appli..."
+      "output_preview": "(no matches)"
+    },
+    {
+      "role": "assistant",
+      "content": "Now let me get the full internal usage of routing symbols inside `applications.py`, and also catch all docs_src tutorials importing `APIRoute` in non-py310 variants:"
     },
     {
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "APIRouter\\|APIRoute\\|serialize_response\\|get_request_handler\\|get_websocket_app\\|run_endpoint_function",
+        "pattern": "routing\\.",
+        "path": "fastapi/applications.py"
+      },
+      "output_preview": "fastapi/applications.py:713:            routing.APIRouter | None,\nfastapi/applications.py:769:            Callable[[routing.APIRoute], str],\nfastapi/applications.py:940:            routing.APIRouter,\n..."
+    },
+    {
+      "role": "tool_call",
+      "tool": "grep",
+      "input": {
+        "pattern": "from fastapi\\.routing import",
+        "path": "docs_src",
+        "include": "*.py"
+      },
+      "output_preview": "docs_src/path_operation_advanced_configuration/tutorial002_py310.py:2:from fastapi.routing import APIRoute\ndocs_src/generate_clients/tutorial003_py310.py:2:from fastapi.routing import APIRoute\ndocs_sr..."
+    },
+    {
+      "role": "tool_call",
+      "tool": "grep",
+      "input": {
+        "pattern": "from fastapi\\.routing import",
+        "path": "tests",
+        "include": "*.py"
+      },
+      "output_preview": "tests/test_generate_unique_id_function.py:4:from fastapi.routing import APIRoute\ntests/test_route_scope.py:3:from fastapi.routing import APIRoute, APIWebSocketRoute\ntests/test_custom_route_class.py:3:..."
+    },
+    {
+      "role": "assistant",
+      "content": "Now let me get the full picture of all docs_src tutorials (including non-py310 variants) and check the `generate_clients` tutorial more broadly:"
+    },
+    {
+      "role": "tool_call",
+      "tool": "grep",
+      "input": {
+        "pattern": "APIRoute",
+        "path": "docs_src",
+        "include": "*.py"
+      },
+      "output_preview": "docs_src/openapi_callbacks/tutorial001_py310.py:1:from fastapi import APIRouter, FastAPI\ndocs_src/openapi_callbacks/tutorial001_py310.py:23:invoices_callback_router = APIRouter()\ndocs_src/path_operati..."
+    },
+    {
+      "role": "tool_call",
+      "tool": "grep",
+      "input": {
+        "pattern": "APIRoute\\|APIRouter\\|APIWebSocketRoute\\|get_request_handler\\|serialize_response\\|run_endpoint_function",
         "path": "tests",
         "include": "*.py"
       },
       "output_preview": "tests/test_dependency_yield_scope.py:5:from fastapi import APIRouter, Depends, FastAPI, HTTPException\ntests/test_dependency_yield_scope.py:71:router = APIRouter()\ntests/test_include_route.py:1:from fa..."
     },
     {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "routing",
-        "path": "fastapi/applications.py"
-      },
-      "output_preview": "fastapi/applications.py:6:from fastapi import routing\nfastapi/applications.py:38:from starlette.routing import BaseRoute\nfastapi/applications.py:713:            routing.APIRouter | None,\nfastapi/appli..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi\\.routing import\\|fastapi\\.routing\\.",
-        "path": "tests",
-        "include": "*.py"
-      },
-      "output_preview": "tests/test_generate_unique_id_function.py:4:from fastapi.routing import APIRoute\ntests/test_route_scope.py:3:from fastapi.routing import APIRoute, APIWebSocketRoute\ntests/test_custom_route_class.py:3:..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "serialize_response\\|get_request_handler\\|get_websocket_app\\|run_endpoint_function\\|request_response\\|websocket_session\\|_merge_lifespan\\|_DefaultLifespan\\|_extract_endpoint_context\\|_build_response_args",
-        "path": ".",
-        "include": "*.py"
-      },
-      "output_preview": "fastapi/routing.py:95:# Copy of starlette.routing.request_response modified to include the\nfastapi/routing.py:97:def request_response(\nfastapi/routing.py:139:# Copy of starlette.routing.websocket_sess..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "routing\\.APIRouter\\|routing\\.APIRoute\\|routing\\.APIWebSocketRoute\\|routing\\.get_request_handler\\|routing\\.serialize_response\\|routing\\.get_websocket_app\\|routing\\.run_endpoint_function\\|routing\\.request_response\\|routing\\.websocket_session\\|routing\\._merge_lifespan\\|routing\\._DefaultLifespan",
-        "path": "fastapi/applications.py"
-      },
-      "output_preview": "fastapi/applications.py:713:            routing.APIRouter | None,\nfastapi/applications.py:769:            Callable[[routing.APIRoute], str],\nfastapi/applications.py:940:            routing.APIRouter,\n..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "APIRoute\\|APIWebSocketRoute",
-        "path": "fastapi",
-        "include": "*.py"
-      },
-      "output_preview": "fastapi/applications.py:713:            routing.APIRouter | None,\nfastapi/applications.py:769:            Callable[[routing.APIRoute], str],\nfastapi/applications.py:940:            routing.APIRouter,\n..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "cat",
-      "input": {
-        "path": "tests/test_generate_unique_id_function.py"
-      },
-      "output_preview": "import warnings\n\nfrom fastapi import APIRouter, FastAPI\nfrom fastapi.routing import APIRoute\nfrom fastapi.testclient import TestClient\nfrom inline_snapshot import snapshot\nfrom pydantic import BaseMod..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "cat",
-      "input": {
-        "path": "tests/test_route_scope.py"
-      },
-      "output_preview": "import pytest\nfrom fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect\nfrom fastapi.routing import APIRoute, APIWebSocketRoute\nfrom fastapi.testclient import TestClient\n\napp = FastAPI()\n\n\n..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "cat",
-      "input": {
-        "path": "tests/test_custom_route_class.py"
-      },
-      "output_preview": "import pytest\nfrom fastapi import APIRouter, FastAPI\nfrom fastapi.routing import APIRoute\nfrom fastapi.testclient import TestClient\nfrom inline_snapshot import snapshot\nfrom starlette.routing import R..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi.routing\\|from fastapi import routing",
-        "path": "docs_src",
-        "include": "*.py"
-      },
-      "output_preview": "docs_src/path_operation_advanced_configuration/tutorial002_py310.py:2:from fastapi.routing import APIRoute\ndocs_src/generate_clients/tutorial003_py310.py:2:from fastapi.routing import APIRoute\ndocs_sr..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi\\.routing import\\|from fastapi import routing",
-        "path": "docs_src",
-        "include": "*.py"
-      },
-      "output_preview": "docs_src/path_operation_advanced_configuration/tutorial002_py310.py:2:from fastapi.routing import APIRoute\ndocs_src/generate_clients/tutorial003_py310.py:2:from fastapi.routing import APIRoute\ndocs_sr..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "APIRoute\\|serialize_response\\|get_request_handler",
-        "path": "fastapi/openapi",
-        "include": "*.py"
-      },
-      "output_preview": "fastapi/openapi/utils.py:216:    *, route: routing.APIRoute, method: str\nfastapi/openapi/utils.py:230:def generate_operation_summary(*, route: routing.APIRoute, method: str) -> str:\nfastapi/openapi/ut..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "ls",
-      "input": {
-        "path": "fastapi"
-      },
-      "output_preview": "d .agents\n  __init__.py\n  __main__.py\nd _compat\n  applications.py\n  background.py\n  cli.py\n  concurrency.py\n  datastructures.py\nd dependencies\n  encoders.py\n  exception_handlers.py\n  exceptions.py\n  l..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi import routing\\|from fastapi\\.routing import",
-        "path": "fastapi/openapi/utils.py"
-      },
-      "output_preview": "fastapi/openapi/utils.py:8:from fastapi import routing\n"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi import routing\\|from fastapi\\.routing import",
-        "path": "fastapi/openapi",
-        "include": "*.py"
-      },
-      "output_preview": "fastapi/openapi/utils.py:8:from fastapi import routing\n"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "APIRoute\\|APIRouter\\|APIWebSocketRoute",
-        "path": "fastapi/openapi",
-        "include": "*.py"
-      },
-      "output_preview": "fastapi/openapi/utils.py:216:    *, route: routing.APIRoute, method: str\nfastapi/openapi/utils.py:230:def generate_operation_summary(*, route: routing.APIRoute, method: str) -> str:\nfastapi/openapi/ut..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "APIRoute\\|APIRouter\\|APIWebSocketRoute\\|serialize_response\\|get_request_handler\\|get_websocket_app\\|run_endpoint_function\\|request_response\\|websocket_session",
-        "path": "fastapi/_compat",
-        "include": "*.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "ls",
-      "input": {
-        "path": "fastapi/_compat"
-      },
-      "output_preview": "  __init__.py\n  shared.py\n  v2.py"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "docs_src",
-        "path": "docs_src",
-        "include": "*.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "find",
-      "input": {
-        "path": "docs_src",
-        "name": "*.py"
-      },
-      "output_preview": "docs_src/server_sent_events/__init__.py\ndocs_src/server_sent_events/tutorial001_py310.py\ndocs_src/server_sent_events/tutorial005_py310.py\ndocs_src/server_sent_events/tutorial004_py310.py\ndocs_src/serv..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi\\.routing import\\|from fastapi import routing",
-        "path": "docs_src",
-        "include": "*.py"
-      },
-      "output_preview": "docs_src/path_operation_advanced_configuration/tutorial002_py310.py:2:from fastapi.routing import APIRoute\ndocs_src/generate_clients/tutorial003_py310.py:2:from fastapi.routing import APIRoute\ndocs_sr..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "Mount",
-        "path": "fastapi",
-        "include": "*.py"
-      },
-      "output_preview": "fastapi/routing.py:89:from starlette.routing import Mount as Mount  # noqa\n"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi\\.routing import Mount\\|from fastapi import.*Mount",
-        "path": ".",
-        "include": "*.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "from fastapi\\.routing import\\|from fastapi import routing",
-        "path": "tests",
-        "include": "*.py"
-      },
-      "output_preview": "tests/test_generate_unique_id_function.py:4:from fastapi.routing import APIRoute\ntests/test_route_scope.py:3:from fastapi.routing import APIRoute, APIWebSocketRoute\ntests/test_custom_route_class.py:3:..."
-    },
-    {
       "role": "assistant",
-      "content": "Now let me pull the full list of symbols from `routing.py` and check all docs_src files that import `APIRoute`:"
-    },
-    {
-      "role": "tool_call",
-      "tool": "cat",
-      "input": {
-        "path": "docs_src/path_operation_advanced_configuration/tutorial002_py310.py"
-      },
-      "output_preview": "from fastapi import FastAPI\nfrom fastapi.routing import APIRoute\n\napp = FastAPI()\n\n\n@app.get(\"/items/\")\nasync def read_items():\n    return [{\"item_id\": \"Foo\"}]\n\n\ndef use_route_names_as_operation_ids(a..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "cat",
-      "input": {
-        "path": "docs_src/generate_clients/tutorial003_py310.py"
-      },
-      "output_preview": "from fastapi import FastAPI\nfrom fastapi.routing import APIRoute\nfrom pydantic import BaseModel\n\n\ndef custom_generate_unique_id(route: APIRoute):\n    return f\"{route.tags[0]}-{route.name}\"\n\n\napp = Fas..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "cat",
-      "input": {
-        "path": "docs_src/custom_request_and_route/tutorial001_py310.py"
-      },
-      "output_preview": "import gzip\nfrom collections.abc import Callable\n\nfrom fastapi import Body, FastAPI, Request, Response\nfrom fastapi.routing import APIRoute\n\n\nclass GzipRequest(Request):\n    async def body(self) -> by..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "cat",
-      "input": {
-        "path": "docs_src/custom_request_and_route/tutorial002_py310.py"
-      },
-      "output_preview": "from collections.abc import Callable\n\nfrom fastapi import Body, FastAPI, HTTPException, Request, Response\nfrom fastapi.exceptions import RequestValidationError\nfrom fastapi.routing import APIRoute\n\n\nc..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "cat",
-      "input": {
-        "path": "docs_src/custom_request_and_route/tutorial003_py310.py"
-      },
-      "output_preview": "import time\nfrom collections.abc import Callable\n\nfrom fastapi import APIRouter, FastAPI, Request, Response\nfrom fastapi.routing import APIRoute\n\n\nclass TimedRoute(APIRoute):\n    def get_route_handler..."
-    },
-    {
-      "role": "assistant",
-      "content": "Now I have everything needed for a complete picture. Let me compile the full analysis:\n\n---\n\n## Complete Blast Radius: `fastapi/routing.py`\n\nHere is every file, symbol, and import that will break \u2014 organized by layer.\n\n---\n\n### \ud83d\udd34 Layer 1: Core FastAPI Internal Consumers (Most Critical)\n\n#### **`fastapi/applications.py`**\nThis is the deepest dependency. It consumes `routing` as a **module-level namespace** (`from fastapi import routing`) and references the following symbols via `routing.<Symbol>` in **~20+ locations**:\n\n| Symbol Used | Occurrences | Context |\n|---|---|---|\n| `routing.APIRouter` | 5+ | Type annotations, `self.router`, webhooks, `include_router()` |\n| `routing.APIRoute` | 10+ | Type annotations on every HTTP verb decorator (`get`, `post`, `put`, etc.) for `generate_unique_id_function` parameter |\n\n**Impact:** Every HTTP verb decorator signature in `FastAPI` (`get`, `post`, `put`, `patch`, `delete`, `options`, `head`, `trace`, `websocket`) references `routing.APIRoute`. Moving or renaming these classes **breaks every type annotation** in `applications.py`.\n\n---\n\n#### **`fastapi/openapi/utils.py`**\nAlso imports `routing` as a module (`from fastapi import routing`). Uses:\n\n| Symbol Used | Occurrences | Context |\n|---|---|---|\n| `routing.APIRoute` | 6 | Function signatures for OpenAPI generation, `isinstance()` checks for route/webhook inspection |\n\n**Impact:** All OpenAPI schema generation logic \u2014 `generate_operation_summary`, `generate_operation_id`, and the route-walking loop in the top-level schema builder \u2014 breaks if `APIRoute` moves.\n\n---\n\n### \ud83d\udfe0 Layer 2: Test Suite (Direct `from fastapi.routing import` statements)\n\nThese 3 test files import **directly from `fastapi.routing`** by name \u2014 the most fragile kind of import:\n\n| File | Symbols Imported |\n|---|---|\n| `tests/test_generate_unique_id_function.py` | `APIRoute` |\n| `tests/test_route_scope.py` | `APIRoute`, `APIWebSocketRoute` |\n| `tests/test_custom_route_class.py` | `APIRoute` |\n\nAll three will raise `ImportError` immediately if either `APIRoute` or `APIWebSocketRoute` is moved without a re-export shim.\n\n---\n\n### \ud83d\udfe1 Layer 3: Documentation Examples (`docs_src/`) \u2014 Direct `from fastapi.routing import` Statements\n\nThese are public-facing tutorial files that users copy-paste. They all import `APIRoute` directly:\n\n| File | Symbol | Usage Pattern |\n|---|---|---|\n| `docs_src/path_operation_advanced_configuration/tutorial002_py310.py` | `APIRoute` | `isinstance()` check when iterating routes |\n| `docs_src/generate_clients/tutorial003_py310.py` | `APIRoute` | Type annotation in `custom_generate_unique_id` |\n| `docs_src/custom_request_and_route/tutorial001_py310.py` | `APIRoute` | Subclassing to create `GzipRoute` |\n| `docs_src/custom_request_and_route/tutorial001_an_py310.py` | `APIRoute` | Subclassing (annotated variant) |\n| `docs_src/custom_request_and_route/tutorial002_py310.py` | `APIRoute` | Subclassing to create `ValidationErrorLoggingRoute` |\n| `docs_src/custom_request_and_route/tutorial002_an_py310.py` | `APIRoute` | Subclassing (annotated variant) |\n| `docs_src/custom_request_and_route/tutorial003_py310.py` | `APIRoute` | Subclassing to create `TimedRoute` |\n\n---\n\n### \ud83d\udfe2 Layer 4: Public API Re-export (`fastapi/__init__.py`)\n\n`fastapi/__init__.py` re-exports one symbol from `routing`:\n```python\nfrom .routing import APIRouter as APIRouter\n```\nAny end-user who does `from fastapi import APIRouter` depends on this. If `APIRouter` moves out of `routing.py`, this line must be updated.\n\n---\n\n### \ud83d\udce6 Complete Symbol Inventory (Everything Exported From `routing.py`)\n\nHere is every public and private symbol defined in `routing.py`, with their risk level for refactoring:\n\n| Symbol | Type | Consumed By | Risk |\n|---|---|---|---|\n| `APIRouter` | Class | `fastapi/__init__.py`, `fastapi/applications.py` (\u00d75) | \ud83d\udd34 Critical |\n| `APIRoute` | Class | `fastapi/applications.py` (\u00d710+), `fastapi/openapi/utils.py` (\u00d76), 3 test files, 7 docs files | \ud83d\udd34 Critical |\n| `APIWebSocketRoute` | Class | `tests/test_route_scope.py` | \ud83d\udfe0 High |\n| `Mount` | Re-export from Starlette | No direct consumers found (re-exported as `# noqa`) | \ud83d\udfe1 Medium |\n| `get_request_handler` | Function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `get_websocket_app` | Function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `serialize_response` | Function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `run_endpoint_function` | Function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `request_response` | Function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `websocket_session` | Function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `_merge_lifespan_context` | Private function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `_DefaultLifespan` | Private class | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `_AsyncLiftContextManager` | Private class | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `_wrap_gen_lifespan_context` | Private function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `_endpoint_context_cache` | Private dict | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `_extract_endpoint_context` | Private function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n| `_build_response_args` | Private function | Internal to `routing.py` only | \ud83d\udfe2 Low |\n\n---\n\n### \u2705 Refactoring Strategy & Checklist\n\n**The key insight:** Only 3 symbols are externally consumed \u2014 `APIRouter`, `APIRoute`, and `APIWebSocketRoute`. Everything else (`get_request_handler`, `serialize_response`, etc.) is purely internal. This means:\n\n1. **Safe to split freely:** All private/internal functions (`get_request_handler`, `serialize_response`, `run_endpoint_function`, `request_response`, `websocket_session`, `_build_response_args`, etc.) can be moved into submodules with no external breakage.\n\n2. **Mandatory: Keep `fastapi/routing.py` as a re-export shim** for these 3 symbols so all external imports keep working:\n   ```python\n   # fastapi/routing.py (after refactor \u2014 shim)\n   from fastapi._routing.classes import APIRouter as APIRouter\n   from fastapi._routing.classes import APIRoute as APIRoute\n   from fastapi._routing.classes import APIWebSocketRoute as APIWebSocketRoute\n   from starlette.routing import Mount as Mount  # noqa\n   ```\n\n3. **Files to update if you change the class names or module paths:**\n   - `fastapi/__init__.py` \u2014 1 line\n   - `fastapi/applications.py` \u2014 ~20 references (all via `routing.APIRouter` / `routing.APIRoute`)\n   - `fastapi/openapi/utils.py` \u2014 ~6 references (all via `routing.APIRoute`)\n   - `tests/test_generate_unique_id_function.py`\n   - `tests/test_route_scope.py`\n   - `tests/"
+      "content": "Now I have a complete picture. Let me compile everything into a definitive answer.\n\n---\n\n## Complete Blast Radius for `fastapi/routing.py`\n\nHere is everything that would break and needs updating, organized by category.\n\n---\n\n### \ud83d\udce6 1. `fastapi/__init__.py` \u2014 Public API Re-export\n\n**File:** `fastapi/__init__.py`\n\n```python\nfrom .routing import APIRouter as APIRouter\n```\n\n`APIRouter` is part of FastAPI's **top-level public API** (`import fastapi; fastapi.APIRouter`). This is the highest-severity dependency \u2014 breaking it breaks every single FastAPI user.\n\n**Symbol exported:** `APIRouter`\n\n---\n\n### \ud83c\udfdb\ufe0f 2. `fastapi/applications.py` \u2014 Core `FastAPI` Class\n\n**File:** `fastapi/applications.py`\n\nThis imports the entire module by reference:\n```python\nfrom fastapi import routing\n```\n\nIt then uses **three symbols** via `routing.<name>` in **15+ method signatures and property references** throughout the `FastAPI` class:\n\n| Symbol | Usage locations |\n|---|---|\n| `routing.APIRouter` | Constructor (`self.router`, `webhooks`), type annotations in `include_router()`, `__init__` params \u2014 **9+ occurrences** |\n| `routing.APIRoute` | Type param for `generate_unique_id_function: Callable[[routing.APIRoute], str]` \u2014 **8+ occurrences** across HTTP verb decorators (`get`, `post`, `put`, `delete`, `patch`, `options`, `head`, `trace`) |\n\nThis file would need every `routing.APIRouter` and `routing.APIRoute` reference updated to the new module path(s).\n\n---\n\n### \ud83e\uddea 3. Test Files \u2014 Direct Imports\n\nThree test files directly import from `fastapi.routing`:\n\n| File | Symbols Imported |\n|---|---|\n| `tests/test_generate_unique_id_function.py` | `APIRoute` |\n| `tests/test_route_scope.py` | `APIRoute`, `APIWebSocketRoute` |\n| `tests/test_custom_route_class.py` | `APIRoute` |\n\n**Unique symbols imported across tests:** `APIRoute`, `APIWebSocketRoute`\n\n---\n\n### \ud83d\udcda 4. Documentation Source Tutorials \u2014 Direct Imports\n\nSeven `docs_src` tutorial files directly import `APIRoute` from `fastapi.routing`:\n\n| File | Symbols Imported | Usage |\n|---|---|---|\n| `docs_src/path_operation_advanced_configuration/tutorial002_py310.py` | `APIRoute` | `isinstance(route, APIRoute)` check |\n| `docs_src/generate_clients/tutorial003_py310.py` | `APIRoute` | Type hint: `def custom_generate_unique_id(route: APIRoute)` |\n| `docs_src/custom_request_and_route/tutorial001_py310.py` | `APIRoute` | Subclassing: `class GzipRoute(APIRoute)` |\n| `docs_src/custom_request_and_route/tutorial001_an_py310.py` | `APIRoute` | Subclassing: `class GzipRoute(APIRoute)` |\n| `docs_src/custom_request_and_route/tutorial002_py310.py` | `APIRoute` | Subclassing: `class ValidationErrorLoggingRoute(APIRoute)` |\n| `docs_src/custom_request_and_route/tutorial002_an_py310.py` | `APIRoute` | Subclassing: `class ValidationErrorLoggingRoute(APIRoute)` |\n| `docs_src/custom_request_and_route/tutorial003_py310.py` | `APIRoute` | (indirect via `APIRouter`) |\n\n---\n\n### \ud83d\udd29 5. Symbols Defined in `routing.py` \u2014 Full Inventory\n\nHere are all symbols by refactor risk:\n\n#### \ud83d\udd34 Public API \u2014 Used externally, highest risk\n| Symbol | Type | Imported By |\n|---|---|---|\n| `APIRouter` | Class | `fastapi/__init__.py`, `fastapi/applications.py` (\u00d79+), and **every FastAPI app ever written** via `from fastapi import APIRouter` |\n| `APIRoute` | Class | `fastapi/applications.py` (\u00d78+), 3 test files, 7 docs_src files |\n| `APIWebSocketRoute` | Class | `tests/test_route_scope.py` |\n\n#### \ud83d\udfe1 Internal \u2014 Used within `routing.py` itself or by `applications.py`\n| Symbol | Type | Notes |\n|---|---|---|\n| `get_request_handler` | Function | Core handler factory used internally by `APIRoute.__init__` |\n| `get_websocket_app` | Function | Used internally by `APIWebSocketRoute` |\n| `serialize_response` | Async Function | Called inside `get_request_handler` |\n| `run_endpoint_function` | Async Function | Called inside `get_request_handler` |\n| `request_response` | Function | ASGI wrapper, used inside `APIRoute` |\n| `websocket_session` | Function | ASGI wrapper, used inside `APIWebSocketRoute` |\n| `_build_response_args` | Function | Internal helper |\n| `_extract_endpoint_context` | Function | Internal helper, cached |\n| `_merge_lifespan_context` | Function | Used by `APIRouter` |\n| `_wrap_gen_lifespan_context` | Function | Used by `APIRouter` |\n| `_DefaultLifespan` | Class | Internal to `APIRouter` |\n| `_AsyncLiftContextManager` | Class | Internal vendored helper |\n\n---\n\n### \ud83d\udccb Master Checklist for Your Refactor\n\n```\nCRITICAL (breaks public API if missed):\n\u2610 fastapi/__init__.py              \u2014 re-export APIRouter from new location\n\u2610 fastapi/applications.py          \u2014 update `from fastapi import routing` +\n                                      all routing.APIRouter / routing.APIRoute refs\n\nTESTS (will fail in CI):\n\u2610 tests/test_generate_unique_id_function.py  \u2014 APIRoute import\n\u2610 tests/test_route_scope.py                  \u2014 APIRoute, APIWebSocketRoute imports\n\u2610 tests/test_custom_route_class.py           \u2014 APIRoute import\n\nDOCS (tutorials will be wrong):\n\u2610 docs_src/path_operation_advanced_configuration/tutorial002_py310.py\n\u2610 docs_src/generate_clients/tutorial003_py310.py\n\u2610 docs_src/custom_request_and_route/tutorial001_py310.py\n\u2610 docs_src/custom_request_and_route/tutorial001_an_py310.py\n\u2610 docs_src/custom_request_and_route/tutorial002_py310.py\n\u2610 docs_src/custom_request_and_route/tutorial002_an_py310.py\n\u2610 docs_src/custom_request_and_route/tutorial003_py310.py\n```\n\n> \u26a0\ufe0f **Strong recommendation:** Keep `fastapi/routing.py` as a **compatibility shim** that re-exports all public symbols (`APIRouter`, `APIRoute`, `APIWebSocketRoute`) from the new sub-modules. This preserves the existing public import path `from fastapi.routing import ...` which is documented, widely used in the ecosystem, and would be a **breaking change** if removed without a deprecation period."
     },
     {
       "role": "final_answer",
-      "content": "Now I have everything needed for a complete picture. Let me compile the full analysis:\n\n---\n\n## Complete Blast Radius: `fastapi/routing.py`\n\nHere is every file, symbol, and import that will break \u2014 organized by layer.\n\n---\n\n### \ud83d\udd34 Layer 1: Core FastAPI Internal Consumers (Most Critical)\n\n#### **`fastapi/applications.py`**\nThis is the deepest dependency. It consumes `routing` as a **module-level namespace** (`from fastapi import routing`) and references the following symbols via `routing.<Symbol>` in **~20+ locations**:\n\n| Symbol Used | Occurrences | Context |\n|---|---|---|\n| `routing.APIRouter` | 5+ | Type annotations, `self.router`, webhooks, `include_router()` |\n| `routing.APIRoute` | 10+ | Type annotations on every HTTP verb decorator (`get`, `post`, `put`, etc.) for `generate_unique_id_function` parameter |\n\n**Impact:** Every HTTP verb decorator signature in `FastAPI` (`get`, `post`, `put`, `patch`, `delete`, `options`, `head`, `trace`, `websocket`) references `routing.APIRoute`. Moving or renaming these classes **breaks every type annotation** in `applications.py`.\n\n---\n\n#### **`fastapi/openapi/utils.py`**\nAlso imports `routing` as a module (`from fastapi import routing`). Uses:\n\n| Symbol Used | Occurrences | Context |\n|---|---|---|\n| `routing.APIRoute` | 6 | Function signatures for OpenAPI generation, `isinstance()` checks for route/webhook inspection |\n\n**Impact:** All OpenAPI schema generation logic \u2014 `generate_operation_summary`, `generate_operation_id`, and the route-walking loop in the top-level schema builder \u2014 breaks if `APIRoute` moves.\n\n---\n\n### \ud83d\udfe0 Layer 2: Test Suite (Direct `from fastapi.routing import` statements)\n\nThese 3 test files import **directly from `fastapi.routing`** by name \u2014 the most fragile kind of import:\n\n| File | Symbols Imported |\n|---|---|\n| `tests/test_generate_unique_id_function.py` | `APIRoute` |\n| `tests/test_route_scope.py` | `APIRoute`, `APIWebSocketRoute` |\n| `tests/test_custom_route_class.py` | `APIRoute` |\n\nAll three will ra"
+      "content": "Now I have a complete picture. Let me compile everything into a definitive answer.\n\n---\n\n## Complete Blast Radius for `fastapi/routing.py`\n\nHere is everything that would break and needs updating, organized by category.\n\n---\n\n### \ud83d\udce6 1. `fastapi/__init__.py` \u2014 Public API Re-export\n\n**File:** `fastapi/__init__.py`\n\n```python\nfrom .routing import APIRouter as APIRouter\n```\n\n`APIRouter` is part of FastAPI's **top-level public API** (`import fastapi; fastapi.APIRouter`). This is the highest-severity dependency \u2014 breaking it breaks every single FastAPI user.\n\n**Symbol exported:** `APIRouter`\n\n---\n\n### \ud83c\udfdb\ufe0f 2. `fastapi/applications.py` \u2014 Core `FastAPI` Class\n\n**File:** `fastapi/applications.py`\n\nThis imports the entire module by reference:\n```python\nfrom fastapi import routing\n```\n\nIt then uses **three symbols** via `routing.<name>` in **15+ method signatures and property references** throughout the `FastAPI` class:\n\n| Symbol | Usage locations |\n|---|---|\n| `routing.APIRouter` | Constructor (`self.router`, `webhooks`), type annotations in `include_router()`, `__init__` params \u2014 **9+ occurrences** |\n| `routing.APIRoute` | Type param for `generate_unique_id_function: Callable[[routing.APIRoute], str]` \u2014 **8+ occurrences** across HTTP verb decorators (`get`, `post`, `put`, `delete`, `patch`, `options`, `head`, `trace`) |\n\nThis file would need every `routing.APIRouter` and `routing.APIRoute` reference updated to the new module path(s).\n\n---\n\n### \ud83e\uddea 3. Test Files \u2014 Direct Imports\n\nThree test files directly import from `fastapi.routing`:\n\n| File | Symbols Imported |\n|---|---|\n| `tests/test_generate_unique_id_function.py` | `APIRoute` |\n| `tests/test_route_scope.py` | `APIRoute`, `APIWebSocketRoute` |\n| `tests/test_custom_route_class.py` | `APIRoute` |\n\n**Unique symbols imported across tests:** `APIRoute`, `APIWebSocketRoute`\n\n---\n\n### \ud83d\udcda 4. Documentation Source Tutorials \u2014 Direct Imports\n\nSeven `docs_src` tutorial files directly import `APIRoute` from `fastapi.routing`:\n\n| File | Symb"
     }
   ]
 }

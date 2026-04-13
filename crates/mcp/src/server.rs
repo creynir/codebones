@@ -342,7 +342,7 @@ impl CodebonesMcpServer {
 
     #[tool(
         name = "get",
-        description = "Retrieves the full source code for a specific symbol or file"
+        description = "Read a symbol's source. Pass filter with a keyword to get only the signature + matching lines (much cheaper). Without filter returns full source."
     )]
     async fn get(
         &self,
@@ -452,7 +452,7 @@ impl CodebonesMcpServer {
 
     #[tool(
         name = "graph_file",
-        description = "Returns the blast radius for a specific file: all files that transitively import it"
+        description = "Blast radius: all files that depend on a given file, and what they import from it. Use before refactoring."
     )]
     async fn graph_file(
         &self,

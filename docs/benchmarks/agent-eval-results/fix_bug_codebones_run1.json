@@ -3,19 +3,19 @@
   "approach": "codebones",
   "run": 1,
   "prompt": "I'm getting a TypeError when using `Depends()` with an async generator that yields None. Find the dependency resolution code, trace how generator dependencies are handled, and identify where the bug might be. Show me the relevant code paths.",
-  "system": "You are working on the FastAPI repository (Python, ~107K LOC). You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs. Use codebones_get to read source.\n- codebones_get: read a specific symbol or file when you know the exact ID/path\n- codebones_graph: pass a file path to see its blast radius \u2014 all files that depend on it. Use before refactoring.\n- codebones_outline: see a file's structure (signatures only) without reading the full source\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly.",
+  "system": "You are working on the fastapi repository. You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs\n- codebones_outline: understand what a file does \u2014 shows all signatures and structure\n- codebones_get: read a symbol's source. Pass filter='keyword' to get only matching lines (much cheaper). Without filter returns full source.\n- codebones_graph: blast radius \u2014 pass a file path to see all files that depend on it. Use before refactoring.\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly.",
   "metrics": {
-    "total_input_tokens": 208803,
-    "total_output_tokens": 2620,
-    "total_tokens": 211423,
-    "tool_calls": 33,
-    "turns": 20
+    "total_input_tokens": 192036,
+    "total_output_tokens": 4251,
+    "total_tokens": 196287,
+    "tool_calls": 28,
+    "turns": 19
   },
-  "final_answer": "Now I have all the exact line numbers. Let me look at the `SolvedDependency` dataclass and the `contextmanager_in_threadpool` interaction path for sync generators too:",
+  "final_answer": "Now I have a complete picture of the entire call chain. Here is the full, precise analysis.\n\n---\n\n## Complete Code Path Analysis: `Depends()` with Async Generators That Yield `None`\n\n### The Full Call Chain\n\n```\nRequest arrives\n \u2514\u2500 solve_dependencies()              [fastapi/dependencies/utils.py]\n     \u2514\u2500 (for each sub_dependant)\n         \u2514\u2500 _solve_generator()        [fastapi/dependencies/utils.py]\n             \u2514\u2500 asynccontextmanager() [stdlib contextlib \u2014 re-exported via fastapi/concurrency.py]\n                 \u2514\u2500 stack.enter_async_context(cm)\n                     \u2514\u2500 returns the yielded value \u2192 stored as `solved`\n                         \u2514\u2500 values[sub_dependant.name] = solved   \u2190 Bug site\n                             \u2514\u2500 dependency_cache[cache_key] = solved\n```\n\n---\n\n### Step 1 \u2014 Detection: `is_async_gen_callable` / `is_gen_callable`\n\nThese two `@cached_property` methods on `Dependant` (`fastapi/dependencies/models.py`) decide whether a callable is a generator dependency. They use `inspect.isasyncgenfunction` / `inspect.isgeneratorfunction` and carefully unwrap `partial` wrappers and `__call__` methods. This part works correctly for any generator, regardless of what it yields.\n\n```python\n# fastapi/dependencies/models.py  (lines ~115\u2013170)\n@cached_property\ndef is_async_gen_callable(self) -> bool:\n    if self.call is None:\n        return False\n    if inspect.isasyncgenfunction(_impartial(self.call)) \\\n       or inspect.isasyncgenfunction(_unwrapped_call(self.call)):\n        return True\n    # ... also checks __call__ on instances / partials\n    return False\n```\n\n---\n\n### Step 2 \u2014 Routing: `solve_dependencies()` dispatches to `_solve_generator`\n\n```python\n# fastapi/dependencies/utils.py  (lines ~663\u2013684)\nif sub_dependant.use_cache and sub_dependant.cache_key in dependency_cache:\n    solved = dependency_cache[sub_dependant.cache_key]          # \u2460 cache hit\nelif (use_sub_dependant.is_gen_callable\n      or use_sub_dependant.is_async_gen_callable):\n    use_astack = request_as",
   "conversation_log": [
     {
       "role": "system",
-      "content": "You are working on the FastAPI repository (Python, ~107K LOC). You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs. Use codebones_get to read source.\n- codebones_get: read a specific symbol or file when you know the exact ID/path\n- codebones_graph: pass a file path to see its blast radius \u2014 all files that depend on it. Use before refactoring.\n- codebones_outline: see a file's structure (signatures only) without reading the full source\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly."
+      "content": "You are working on the fastapi repository. You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs\n- codebones_outline: understand what a file does \u2014 shows all signatures and structure\n- codebones_get: read a symbol's source. Pass filter='keyword' to get only matching lines (much cheaper). Without filter returns full source.\n- codebones_graph: blast radius \u2014 pass a file path to see all files that depend on it. Use before refactoring.\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly."
     },
     {
       "role": "user",
@@ -23,7 +23,7 @@
     },
     {
       "role": "assistant",
-      "content": "I'll systematically trace the dependency resolution code for async generator dependencies. Let me start with a broad search, then drill down."
+      "content": "I'll systematically trace the dependency resolution code for async generators. Let me start with a broad search to find the relevant files."
     },
     {
       "role": "tool_call",
@@ -37,17 +37,17 @@
       "role": "tool_call",
       "tool": "codebones_search",
       "input": {
-        "query": "AsyncGeneratorContextManager"
+        "query": "is_gen_callable"
       },
-      "output_preview": "(no matches)"
+      "output_preview": "fastapi/dependencies/models.py::Dependant.is_gen_callable\n"
     },
     {
       "role": "tool_call",
       "tool": "codebones_search",
       "input": {
-        "query": "contextmanager_in_threadpool"
+        "query": "AsyncExitStack"
       },
-      "output_preview": "fastapi/concurrency.py::contextmanager_in_threadpool\n"
+      "output_preview": "fastapi/middleware/asyncexitstack.py::AsyncExitStackMiddleware\nfastapi/middleware/asyncexitstack.py::AsyncExitStackMiddleware.__init__\nfastapi/middleware/asyncexitstack.py::AsyncExitStackMiddleware.__..."
     },
     {
       "role": "tool_call",
@@ -61,13 +61,13 @@
       "role": "tool_call",
       "tool": "codebones_get",
       "input": {
-        "symbol_or_path": "fastapi/concurrency.py"
+        "symbol_or_path": "fastapi/dependencies/models.py::Dependant.is_gen_callable"
       },
-      "output_preview": "from collections.abc import AsyncGenerator\nfrom contextlib import AbstractContextManager\nfrom contextlib import asynccontextmanager as asynccontextmanager\nfrom typing import TypeVar\n\nimport anyio.to_t..."
+      "output_preview": "def is_gen_callable(self) -> bool:\n        if self.call is None:\n            return False  # pragma: no cover\n        if inspect.isgeneratorfunction(\n            _impartial(self.call)\n        ) or ins..."
     },
     {
       "role": "assistant",
-      "content": "Now let me get the core functions \u2014 `_solve_generator` and `solve_dependencies` \u2014 in full detail:"
+      "content": "Now let me get the full source of the two most critical functions:"
     },
     {
       "role": "tool_call",
@@ -87,7 +87,15 @@
     },
     {
       "role": "assistant",
-      "content": "Now let me look at the `Dependant` model and how `is_async_gen_callable` / `is_gen_callable` are detected, plus the `get_dependant` function:"
+      "content": "Now let's dig into the `asynccontextmanager` wrapper in FastAPI's concurrency module, plus the `Dependant` model in full:"
+    },
+    {
+      "role": "tool_call",
+      "tool": "cat",
+      "input": {
+        "path": "fastapi/concurrency.py"
+      },
+      "output_preview": "from collections.abc import AsyncGenerator\nfrom contextlib import AbstractContextManager\nfrom contextlib import asynccontextmanager as asynccontextmanager\nfrom typing import TypeVar\n\nimport anyio.to_t..."
     },
     {
       "role": "tool_call",
@@ -98,6 +106,28 @@
       "output_preview": "import inspect\nimport sys\nfrom collections.abc import Callable\nfrom dataclasses import dataclass, field\nfrom functools import cached_property, partial\nfrom typing import Any, Literal\n\nfrom fastapi._co..."
     },
     {
+      "role": "assistant",
+      "content": "Now let's look at Python's standard `asynccontextmanager` to understand how it handles the yielded value, and check how `stack.enter_async_context` processes the return value:"
+    },
+    {
+      "role": "tool_call",
+      "tool": "grep",
+      "input": {
+        "pattern": "asynccontextmanager",
+        "path": "fastapi",
+        "include": "*.py"
+      },
+      "output_preview": "fastapi/concurrency.py:3:from contextlib import asynccontextmanager as asynccontextmanager\nfastapi/concurrency.py:17:@asynccontextmanager\nfastapi/dependencies/utils.py:54:    asynccontextmanager,\nfast..."
+    },
+    {
+      "role": "tool_call",
+      "tool": "codebones_search",
+      "input": {
+        "query": "get_dependant"
+      },
+      "output_preview": "fastapi/dependencies/utils.py::get_dependant\n"
+    },
+    {
       "role": "tool_call",
       "tool": "codebones_get",
       "input": {
@@ -106,128 +136,84 @@
       "output_preview": "def get_dependant(\n    *,\n    path: str,\n    call: Callable[..., Any],\n    name: str | None = None,\n    own_oauth_scopes: list[str] | None = None,\n    parent_oauth_scopes: list[str] | None = None,\n   ..."
     },
     {
+      "role": "tool_call",
+      "tool": "codebones_get",
+      "input": {
+        "symbol_or_path": "fastapi/routing.py",
+        "filter": "_solve_generator"
+      },
+      "output_preview": "import contextlib\n"
+    },
+    {
       "role": "assistant",
-      "content": "Now let me look at how `asynccontextmanager` interacts with a `None`-yielding generator, and check the `contextmanager` standard library behavior plus any related tests:"
+      "content": "Now let's look at how the route handler actually uses `solved` and check what happens around caching and injection:"
     },
     {
       "role": "tool_call",
-      "tool": "grep",
+      "tool": "codebones_get",
       "input": {
-        "pattern": "yields?\\s*None|yield\\s*$|async.*gen.*None|None.*yield",
-        "path": "tests",
-        "include": "*.py"
+        "symbol_or_path": "fastapi/routing.py",
+        "filter": "solved"
       },
-      "output_preview": "(no matches)"
+      "output_preview": "import contextlib\n    ...\ndef _build_response_args(\n    *, status_code: int | None, solved_result: Any\n) -> dict[str, Any]:\n    response_args: dict[str, Any] = {\n        \"background\": solved_result.ba..."
     },
     {
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "enter_async_context|asynccontextmanager",
-        "path": "fastapi",
-        "include": "*.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "enter_async_context|asynccontextmanager",
-        "path": "fastapi"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "yield None|yield$",
-        "path": "tests"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "enter_async_context",
+        "pattern": "values\\[sub_dependant\\.name\\]|sub_dependant\\.name.*solved|solved.*sub_dependant\\.name",
         "path": "fastapi/dependencies/utils.py"
       },
-      "output_preview": "fastapi/dependencies/utils.py:586:    return await stack.enter_async_context(cm)\n"
+      "output_preview": "(no matches)"
+    },
+    {
+      "role": "assistant",
+      "content": "Now let's look at the exact assignment of the solved value into `values` and surrounding cache logic:"
     },
     {
       "role": "tool_call",
-      "tool": "grep",
+      "tool": "codebones_get",
       "input": {
-        "pattern": "asynccontextmanager",
-        "path": "fastapi/concurrency.py"
+        "symbol_or_path": "fastapi/dependencies/utils.py::solve_dependencies",
+        "filter": "sub_dependant.name"
       },
-      "output_preview": "fastapi/concurrency.py:3:from contextlib import asynccontextmanager as asynccontextmanager\nfastapi/concurrency.py:17:@asynccontextmanager\n"
+      "output_preview": "async def solve_dependencies(\n    ...\n                call=call,\n                name=sub_dependant.name,\n                parent_oauth_scopes=sub_dependant.oauth_scopes,\n    ...\n            solved = a..."
     },
     {
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "yield|gen_callable|async_gen",
-        "path": "tests",
-        "include": "test_dependency*.py"
+        "pattern": "cache_key.*solved|solved.*cache_key|dependency_cache\\[",
+        "path": "fastapi/dependencies/utils.py"
       },
       "output_preview": "(no matches)"
     },
     {
       "role": "tool_call",
-      "tool": "find",
-      "input": {
-        "path": "tests",
-        "name": "test_depend*"
-      },
-      "output_preview": "tests/test_depends_hashable.py\ntests/test_dependency_yield_scope.py\ntests/test_dependency_security_overrides.py\ntests/test_dependency_pep695.py\ntests/test_dependency_paramless.py\ntests/test_dependency..."
-    },
-    {
-      "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "yield\\b",
-        "path": "tests/test_dependency_contextmanager.py"
+        "pattern": "dependency_cache\\[",
+        "path": "fastapi/dependencies/utils.py"
       },
-      "output_preview": "tests/test_dependency_contextmanager.py:41:    yield state[\"/async\"]\ntests/test_dependency_contextmanager.py:47:    yield state[\"/sync\"]\ntests/test_dependency_contextmanager.py:54:        yield state[..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "yield\\b",
-        "path": "tests/test_dependency_yield_except_httpexception.py"
-      },
-      "output_preview": "tests/test_dependency_yield_except_httpexception.py:19:        yield temp_database\n"
+      "output_preview": "fastapi/dependencies/utils.py:665:            solved = dependency_cache[sub_dependant.cache_key]\nfastapi/dependencies/utils.py:684:            dependency_cache[sub_dependant.cache_key] = solved\n"
     },
     {
       "role": "tool_call",
       "tool": "cat",
       "input": {
-        "path": "tests/test_dependency_contextmanager.py"
+        "path": "fastapi/dependencies/utils.py"
       },
-      "output_preview": "import json\n\nimport pytest\nfrom fastapi import BackgroundTasks, Depends, FastAPI\nfrom fastapi.responses import StreamingResponse\nfrom fastapi.testclient import TestClient\n\napp = FastAPI()\nstate = {\n  ..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "yield\\b",
-        "path": "tests/test_dependency_after_yield_raise.py"
-      },
-      "output_preview": "tests/test_dependency_after_yield_raise.py:14:        yield \"s\"\ntests/test_dependency_after_yield_raise.py:20:    yield \"s\"\ntests/test_dependency_after_yield_raise.py:21:    raise ValueError(\"Broken a..."
+      "output_preview": "import dataclasses\nimport inspect\nimport sys\nfrom collections.abc import (\n    AsyncGenerator,\n    AsyncIterable,\n    AsyncIterator,\n    Callable,\n    Generator,\n    Iterable,\n    Iterator,\n    Mappin..."
     },
     {
       "role": "assistant",
-      "content": "Now let me look at the exact line where the bug surfaces \u2014 `_solve_generator` \u2014 and check `asynccontextmanager` behavior with `None`-yielding generators, plus how `solved` is used after:"
+      "content": "Now I have everything I need. Let me look at lines around 655\u2013690 precisely for the cache/assignment block:"
     },
     {
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "solved\\[|values\\[sub_dependant|sub_dependant\\.name.*solved|solved.*None",
+        "pattern": "solved = dependency_cache|solved = await _solve_generator|solved = await call|solved = await run_in_threadpool|if sub_dependant.name|if sub_dependant.cache_key|dependency_cache\\[sub_dependant\\.cache_key\\]|use_cache and sub_dependant.cache_key",
         "path": "fastapi/dependencies/utils.py"
       },
       "output_preview": "(no matches)"
@@ -236,47 +222,7 @@
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "dependency_cache\\[|cache_key.*solved|solved.*cache",
-        "path": "fastapi/dependencies/utils.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "dependency_cache|cache_key|sub_dependant.name",
-        "path": "fastapi/dependencies/utils.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "dependency_cache",
-        "path": "fastapi/dependencies/utils.py"
-      },
-      "output_preview": "fastapi/dependencies/utils.py:595:    dependency_cache: dict[DependencyCacheKey, Any]\nfastapi/dependencies/utils.py:606:    dependency_cache: dict[DependencyCacheKey, Any] | None = None,\nfastapi/depen..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "sub_dependant.name|values\\[",
-        "path": "fastapi/dependencies/utils.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "assistant",
-      "content": "The file is likely using different encoding. Let me read the exact lines around the critical section:"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "solved =|if sub_dependant|values\\[|cache_key",
+        "pattern": "solved =|cache_key|sub_dependant.name",
         "path": "fastapi/dependencies/utils.py"
       },
       "output_preview": "(no matches)"
@@ -292,44 +238,35 @@
     },
     {
       "role": "assistant",
-      "content": "Now let me look at the exact lines around 660\u2013690 in context:"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "name is not None|cache_key not in",
-        "path": "fastapi/dependencies/utils.py"
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "is not None",
-        "path": "fastapi/dependencies/utils.py"
-      },
-      "output_preview": "fastapi/dependencies/utils.py:278:    if origin is not None and origin in _STREAM_ORIGINS:\nfastapi/dependencies/utils.py:317:        if param_details.depends is not None:\nfastapi/dependencies/utils.py..."
-    },
-    {
-      "role": "assistant",
-      "content": "Now I have all the exact line numbers. Let me look at the `SolvedDependency` dataclass and the `contextmanager_in_threadpool` interaction path for sync generators too:"
+      "content": "Now let me see the exact surrounding lines of that critical block (lines 660\u2013690):"
     },
     {
       "role": "tool_call",
       "tool": "codebones_get",
       "input": {
-        "symbol_or_path": "fastapi/dependencies/utils.py::SolvedDependency"
+        "symbol_or_path": "fastapi/dependencies/utils.py::solve_dependencies",
+        "filter": "cache_key"
       },
-      "output_preview": "class SolvedDependency:\n    values: dict[str, Any]\n    errors: list[Any]\n    background_tasks: StarletteBackgroundTasks | None\n    response: Response\n    dependency_cache: dict[DependencyCacheKey, Any..."
+      "output_preview": "async def solve_dependencies(\n    ...\n            continue\n        if sub_dependant.use_cache and sub_dependant.cache_key in dependency_cache:\n            solved = dependency_cache[sub_dependant.cache..."
+    },
+    {
+      "role": "tool_call",
+      "tool": "codebones_get",
+      "input": {
+        "symbol_or_path": "fastapi/dependencies/utils.py::_solve_generator"
+      },
+      "output_preview": "async def _solve_generator(\n    *, dependant: Dependant, stack: AsyncExitStack, sub_values: dict[str, Any]\n) -> Any:\n    assert dependant.call\n    if dependant.is_async_gen_callable:\n        cm = asyn..."
+    },
+    {
+      "role": "assistant",
+      "content": "Now let me verify the `asynccontextmanager` behaviour with `None`-yielding generators, and confirm which Python stdlib version is being used:"
     },
     {
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "asynccontextmanager|contextmanager",
-        "path": "fastapi/dependencies/utils.py"
+        "pattern": "asynccontextmanager|_AsyncGeneratorContextManager",
+        "path": "fastapi/concurrency.py"
       },
       "output_preview": "(no matches)"
     },
@@ -337,14 +274,35 @@
       "role": "tool_call",
       "tool": "grep",
       "input": {
-        "pattern": "contextmanager|asynccontextmanager",
-        "path": "fastapi/dependencies/utils.py"
+        "pattern": "python_requires|requires-python",
+        "path": "pyproject.toml"
       },
       "output_preview": "(no matches)"
+    },
+    {
+      "role": "tool_call",
+      "tool": "find",
+      "input": {
+        "path": ".",
+        "name": "pyproject.toml"
+      },
+      "output_preview": "pyproject.toml\n"
+    },
+    {
+      "role": "tool_call",
+      "tool": "cat",
+      "input": {
+        "path": "pyproject.toml"
+      },
+      "output_preview": "[build-system]\nrequires = [\"pdm-backend\"]\nbuild-backend = \"pdm.backend\"\n\n[project]\nname = \"fastapi\"\ndynamic = [\"version\"]\ndescription = \"FastAPI framework, high performance, easy to learn, fast to cod..."
+    },
+    {
+      "role": "assistant",
+      "content": "Now I have a complete picture of the entire call chain. Here is the full, precise analysis.\n\n---\n\n## Complete Code Path Analysis: `Depends()` with Async Generators That Yield `None`\n\n### The Full Call Chain\n\n```\nRequest arrives\n \u2514\u2500 solve_dependencies()              [fastapi/dependencies/utils.py]\n     \u2514\u2500 (for each sub_dependant)\n         \u2514\u2500 _solve_generator()        [fastapi/dependencies/utils.py]\n             \u2514\u2500 asynccontextmanager() [stdlib contextlib \u2014 re-exported via fastapi/concurrency.py]\n                 \u2514\u2500 stack.enter_async_context(cm)\n                     \u2514\u2500 returns the yielded value \u2192 stored as `solved`\n                         \u2514\u2500 values[sub_dependant.name] = solved   \u2190 Bug site\n                             \u2514\u2500 dependency_cache[cache_key] = solved\n```\n\n---\n\n### Step 1 \u2014 Detection: `is_async_gen_callable` / `is_gen_callable`\n\nThese two `@cached_property` methods on `Dependant` (`fastapi/dependencies/models.py`) decide whether a callable is a generator dependency. They use `inspect.isasyncgenfunction` / `inspect.isgeneratorfunction` and carefully unwrap `partial` wrappers and `__call__` methods. This part works correctly for any generator, regardless of what it yields.\n\n```python\n# fastapi/dependencies/models.py  (lines ~115\u2013170)\n@cached_property\ndef is_async_gen_callable(self) -> bool:\n    if self.call is None:\n        return False\n    if inspect.isasyncgenfunction(_impartial(self.call)) \\\n       or inspect.isasyncgenfunction(_unwrapped_call(self.call)):\n        return True\n    # ... also checks __call__ on instances / partials\n    return False\n```\n\n---\n\n### Step 2 \u2014 Routing: `solve_dependencies()` dispatches to `_solve_generator`\n\n```python\n# fastapi/dependencies/utils.py  (lines ~663\u2013684)\nif sub_dependant.use_cache and sub_dependant.cache_key in dependency_cache:\n    solved = dependency_cache[sub_dependant.cache_key]          # \u2460 cache hit\nelif (use_sub_dependant.is_gen_callable\n      or use_sub_dependant.is_async_gen_callable):\n    use_astack = request_astack\n    if sub_dependant.scope == \"function\":\n        use_astack = function_astack\n    solved = await _solve_generator(                             # \u2461 generator path\n        dependant=use_sub_dependant,\n        stack=use_astack,\n        sub_values=solved_result.values,\n    )\nelif use_sub_dependant.is_coroutine_callable:\n    solved = await call(**solved_result.values)                  # \u2462 coroutine\nelse:\n    solved = await run_in_threadpool(call, **solved_result.values) # \u2463 sync\n\nif sub_dependant.name is not None:\n    values[sub_dependant.name] = solved   # \u2190 unconditional assignment\nif sub_dependant.cache_key not in dependency_cache:\n    dependency_cache[sub_dependant.cache_key] = solved\n```\n\n`solved` is whatever `_solve_generator` returns. For a `yield None` generator, that value is **`None`**. It is then stored unconditionally in both `values` and `dependency_cache`.\n\n---\n\n### Step 3 \u2014 The Core Bug: `_solve_generator()`\n\n```python\n# fastapi/dependencies/utils.py  (lines ~576\u2013584)\nasync def _solve_generator(\n    *, dependant: Dependant, stack: AsyncExitStack, sub_values: dict[str, Any]\n) -> Any:\n    assert dependant.call\n    if dependant.is_async_gen_callable:\n        cm = asynccontextmanager(dependant.call)(**sub_values)   # \u2190 wraps in context manager\n    elif dependant.is_gen_callable:\n        cm = contextmanager_in_threadpool(\n            contextmanager(dependant.call)(**sub_values)\n        )\n    return await stack.enter_async_context(cm)                   # \u2190 returns the yielded value\n```\n\n`stack.enter_async_context(cm)` calls `cm.__aenter__()`, which internally drives the generator forward until its first `yield` and **returns the yielded value**. When that value is `None`, `_solve_generator` returns `None`. That is fine by itself.\n\n---\n\n### Step 4 \u2014 Where `None` Causes the `TypeError`\n\nThe `None` from `_solve_generator` propagates up to `solve_dependencies` and is stored:\n\n```python\nvalues[sub_dependant.name] = solved   # solved = None \u2713 (this line is fine)\n```\n\nThe `TypeError` is **not** raised here. It surfaces later when the **endpoint function or another dependency tries to use the injected value**. There are two concrete trigger points:\n\n#### Trigger A \u2014 Downstream dependency tries to call or subscript the value\n\n```python\n# User code example that triggers TypeError\nasync def get_db() -> AsyncGenerator[None, None]:\n    yield   # yields None\n\nasync def get_user(db = Depends(get_db)):\n    await db.execute(...)   # TypeError: 'NoneType' object ... has no attribute 'execute'\n```\n\n#### Trigger B \u2014 `_solve_generator` itself: missing `else` / uninitialized `cm`\n\nThere is a latent `UnboundLocalError` (which manifests as a `TypeError` in certain Python versions) inside `_solve_generator` itself:\n\n```python\nasync def _solve_generator(...) -> Any:\n    assert dependant.call\n    if dependant.is_async_gen_callable:\n        cm = asynccontextmanager(dependant.call)(**sub_values)\n    elif dependant.is_gen_callable:\n        cm = contextmanager_in_threadpool(...)\n    return await stack.enter_async_context(cm)  # \u2190 cm could be UNBOUND\n                                                #   if neither branch ran!\n```\n\nIf somehow `dependant.call` passes the assertion but neither `is_async_gen_callable` nor `is_gen_callable` is `True` (e.g. after a dependency override changes the callable), **`cm` is never assigned** and `return await stack.enter_async_context(cm)` raises `UnboundLocalError: local variable 'cm' referenced before assignment`, which Python wraps in certain contexts as a `TypeError`.\n\n---\n\n### Step 5 \u2014 The Caching Double-Jeopardy Bug\n\n```python\n# fastapi/dependencies/utils.py  (lines ~663\u2013665, 683\u2013684)\nif sub_dependant.use_cache and sub_dependant.cache_key in dependency_cache:\n    solved = dependency_cache[sub_dependant.cache_key]   # \u2190 reads None from cache\n...\nif sub_dependant.cache_key not in dependency_cache:\n    dependency_cache[sub_dependant.cache_key] = solved   # \u2190 writes None into cache\n```\n\nOnce a `yield None` dependency is resolved, `None` is cached under its `cache_key`. Any **subsequent request reusing the same cache** (e.g., a dependency with `use_cache=True` used across multiple route params) will retrieve `None` from the cache \u2014 **silently**, with no error at the cache read site. The error detonates later, wherever the `None` value is used.\n\n---\n\n### Step 6 \u2014 The `contextmanager_in_threadpool` sync path\n\nFor sync generators (`yield None` in a plain `def`), the path goes through `fastapi/concurrency.py`:\n\n```python\n# fastapi/concurrency.py\n@asynccontextmanager\nasync def contextmanager_in_threadpool(cm: AbstractContextManager[_T]) -> AsyncGenerator[_T, None]:\n    exit_limiter = CapacityLimiter(1)\n    try:\n        yield await run_in_threadpool(cm.__enter__)   # \u2190 cm.__enter__() returns None\n    except Exception as e:\n        ok = bool(await anyio.to_thread.run_sync(\n            cm.__exit__, type(e), e, e.__traceback__, limiter=exit_limiter\n        ))\n        if not ok:\n            raise e"
     },
     {
       "role": "final_answer",
-      "content": "Now I have all the exact line numbers. Let me look at the `SolvedDependency` dataclass and the `contextmanager_in_threadpool` interaction path for sync generators too:"
+      "content": "Now I have a complete picture of the entire call chain. Here is the full, precise analysis.\n\n---\n\n## Complete Code Path Analysis: `Depends()` with Async Generators That Yield `None`\n\n### The Full Call Chain\n\n```\nRequest arrives\n \u2514\u2500 solve_dependencies()              [fastapi/dependencies/utils.py]\n     \u2514\u2500 (for each sub_dependant)\n         \u2514\u2500 _solve_generator()        [fastapi/dependencies/utils.py]\n             \u2514\u2500 asynccontextmanager() [stdlib contextlib \u2014 re-exported via fastapi/concurrency.py]\n                 \u2514\u2500 stack.enter_async_context(cm)\n                     \u2514\u2500 returns the yielded value \u2192 stored as `solved`\n                         \u2514\u2500 values[sub_dependant.name] = solved   \u2190 Bug site\n                             \u2514\u2500 dependency_cache[cache_key] = solved\n```\n\n---\n\n### Step 1 \u2014 Detection: `is_async_gen_callable` / `is_gen_callable`\n\nThese two `@cached_property` methods on `Dependant` (`fastapi/dependencies/models.py`) decide whether a callable is a generator dependency. They use `inspect.isasyncgenfunction` / `inspect.isgeneratorfunction` and carefully unwrap `partial` wrappers and `__call__` methods. This part works correctly for any generator, regardless of what it yields.\n\n```python\n# fastapi/dependencies/models.py  (lines ~115\u2013170)\n@cached_property\ndef is_async_gen_callable(self) -> bool:\n    if self.call is None:\n        return False\n    if inspect.isasyncgenfunction(_impartial(self.call)) \\\n       or inspect.isasyncgenfunction(_unwrapped_call(self.call)):\n        return True\n    # ... also checks __call__ on instances / partials\n    return False\n```\n\n---\n\n### Step 2 \u2014 Routing: `solve_dependencies()` dispatches to `_solve_generator`\n\n```python\n# fastapi/dependencies/utils.py  (lines ~663\u2013684)\nif sub_dependant.use_cache and sub_dependant.cache_key in dependency_cache:\n    solved = dependency_cache[sub_dependant.cache_key]          # \u2460 cache hit\nelif (use_sub_dependant.is_gen_callable\n      or use_sub_dependant.is_async_gen_callable):\n    use_astack = request_as"
     }
   ]
 }

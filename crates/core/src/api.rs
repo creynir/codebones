@@ -45,7 +45,13 @@ pub struct BlastRadiusResult {
 const CODEBONES_SECTION: &str = r#"
 ## Codebones
 
-This project is indexed by [codebones](https://github.com/anthropics/codebones). Use `codebones search`, `codebones outline`, and `codebones get` to explore the codebase structure before reading files directly.
+This project is indexed by codebones. Prefer codebones tools over file crawling:
+
+- `codebones search <name>` — find functions/classes by name
+- `codebones get <symbol> --filter <keyword>` — read matching lines only (cheap)
+- `codebones get <symbol>` — read full source (when you need the complete implementation)
+- `codebones outline <file>` — see file structure (signatures, bodies elided)
+- `codebones graph <file>` — blast radius: what depends on this file and what they import
 "#;
 
 /// Performs first-run setup for a project directory:

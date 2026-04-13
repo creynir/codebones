@@ -3,19 +3,19 @@
   "approach": "codebones",
   "run": 1,
   "prompt": "Add a CORS middleware to the FastAPI application that allows origins from http://localhost:3000 and http://localhost:5173. Find where middleware is configured, look at existing middleware examples as a pattern, and write the code. Show me the exact file to edit and the code to add.",
-  "system": "You are working on the FastAPI repository (Python, ~107K LOC). You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs. Use codebones_get to read source.\n- codebones_get: read a specific symbol or file when you know the exact ID/path\n- codebones_graph: pass a file path to see its blast radius \u2014 all files that depend on it. Use before refactoring.\n- codebones_outline: see a file's structure (signatures only) without reading the full source\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly.",
+  "system": "You are working on the fastapi repository. You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs\n- codebones_outline: understand what a file does \u2014 shows all signatures and structure\n- codebones_get: read a symbol's source. Pass filter='keyword' to get only matching lines (much cheaper). Without filter returns full source.\n- codebones_graph: blast radius \u2014 pass a file path to see all files that depend on it. Use before refactoring.\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly.",
   "metrics": {
-    "total_input_tokens": 19791,
-    "total_output_tokens": 2043,
-    "total_tokens": 21834,
-    "tool_calls": 17,
-    "turns": 5
+    "total_input_tokens": 34702,
+    "total_output_tokens": 2199,
+    "total_tokens": 36901,
+    "tool_calls": 19,
+    "turns": 9
   },
-  "final_answer": "I now have the complete, authoritative picture. Here's the exact file and code.\n\n---\n\n## What I Found\n\n| Discovery | Detail |\n|---|---|\n| **Primary app file** | `tests/main.py` \u2014 the repo's central FastAPI `app` instance |\n| **CORS middleware class** | Re-exported from Starlette via `fastapi/middleware/cors.py` as `CORSMiddleware` |\n| **Canonical pattern** | `app.add_middleware(SomeMiddleware, **kwargs)` \u2014 seen in `docs_src/cors/tutorial001_py310.py`, `advanced_middleware/tutorial001\u2013003` |\n| **Existing CORS example** | `docs_src/cors/tutorial001_py310.py` \u2014 the exact official pattern to follow |\n| **Zero existing CORS config** | `grep` found no `add_middleware` or `CORSMiddleware` calls anywhere in the live app |\n\n---\n\n## File to Edit\n\n**`tests/main.py`**\n\n---\n\n## Exact Code Change\n\nAdd the import and `add_middleware` call right after the `app = FastAPI(...)` line, following the identical pattern used in `docs_src/cors/tutorial001_py310.py` and the three advanced middleware tutorials:\n\n```python\n# tests/main.py\n\nimport http                                          # (already present)\n\nfrom fastapi import FastAPI, Path, Query             # (already present)\nfrom fastapi.middleware.cors import CORSMiddleware   # \u2190 ADD THIS IMPORT\n\nexternal_docs = {\n    \"description\": \"External API documentation.\",\n    \"url\": \"https://docs.example.com/api-general\",\n}\n\napp = FastAPI(openapi_external_docs=external_docs)   # (already present)\n\n# \u2500\u2500\u2500 ADD THIS BLOCK \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\norigins = [\n    \"http://localhost:3000\",   # React / Create React App default\n    \"http://localhost:5173\",   # Vite default\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,      # only the two origins listed above\n    allow_credentials=True,     # allow cookies / Authorization headers\n    allow_methods=[\"*\"],        # GET, POST, PUT, DELETE, OPTIONS, etc.\n    allow_headers=[\"*\"],        # Content-Type, Authorization, etc.\n)\n# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500",
+  "final_answer": "I now have everything needed. Here's the complete picture and exact code:\n\n---\n\n## What I Found\n\n| File | Role |\n|---|---|\n| `fastapi/middleware/cors.py` | Re-exports `CORSMiddleware` from Starlette \u2014 this is the import path you use |\n| `docs_src/cors/tutorial001_py310.py` | The canonical CORS example in the repo |\n| `docs_src/advanced_middleware/tutorial001\u2013003` | Show the `app.add_middleware(MiddlewareClass, **kwargs)` pattern |\n| `fastapi/applications.py` | `FastAPI` class \u2014 `add_middleware()` is inherited from Starlette's `build_middleware_stack`, which wraps all `user_middleware` around the app |\n\nThe pattern is **always the same**: import the middleware class, build an `origins` list, call `app.add_middleware()` **before any route definitions**.\n\n---\n\n## File to Edit\n\nYour application entry point \u2014 wherever you have `app = FastAPI()`. Based on the repo's own canonical example, that is:\n\n**`docs_src/cors/tutorial001_py310.py`** (the existing CORS tutorial file), or in your own project, the file containing `app = FastAPI()`.\n\n---\n\n## Exact Code to Add\n\nReplace the `origins` list and `add_middleware` call. Here is the complete, production-ready version:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware  # re-exported from starlette\n\napp = FastAPI()\n\n# \u2500\u2500 CORS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\norigins = [\n    \"http://localhost:3000\",   # e.g. Create React App / Next.js dev server\n    \"http://localhost:5173\",   # e.g. Vite dev server\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,       # which origins may make cross-origin requests\n    allow_credentials=True,      # allow cookies / Authorization headers\n    allow_methods=[\"*\"],         # GET, POST, PUT, DELETE, OPTIONS, etc.\n    allow_headers=[\"*\"],         # Content-Type, Authorization, etc.\n)\n# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n\n@app.get(\"/\")\nasync def main():\n    return",
   "conversation_log": [
     {
       "role": "system",
-      "content": "You are working on the FastAPI repository (Python, ~107K LOC). You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs. Use codebones_get to read source.\n- codebones_get: read a specific symbol or file when you know the exact ID/path\n- codebones_graph: pass a file path to see its blast radius \u2014 all files that depend on it. Use before refactoring.\n- codebones_outline: see a file's structure (signatures only) without reading the full source\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly."
+      "content": "You are working on the fastapi repository. You have access to standard tools (grep, cat, find, ls) AND codebones structural tools. Use the best tool for each step:\n- codebones_search: find functions/classes by name \u2014 returns symbol IDs\n- codebones_outline: understand what a file does \u2014 shows all signatures and structure\n- codebones_get: read a symbol's source. Pass filter='keyword' to get only matching lines (much cheaper). Without filter returns full source.\n- codebones_graph: blast radius \u2014 pass a file path to see all files that depend on it. Use before refactoring.\n- grep: find text patterns (imports, strings, config values)\n- cat: read small files or config files\nComplete the task thoroughly."
     },
     {
       "role": "user",
@@ -23,7 +23,15 @@
     },
     {
       "role": "assistant",
-      "content": "I'll research the codebase systematically before writing a single line. Let me find middleware configuration, existing patterns, and CORS-related code in parallel."
+      "content": "Let me explore the codebase systematically to find where middleware is configured and understand existing patterns."
+    },
+    {
+      "role": "tool_call",
+      "tool": "ls",
+      "input": {
+        "path": "."
+      },
+      "output_preview": "d .codebones\nd .git\nd .github\n  .gitignore\n  .pre-commit-config.yaml\n  .python-version\n  CITATION.cff\n  CONTRIBUTING.md\n  LICENSE\n  README.md\n  SECURITY.md\nd docs\nd docs_src\nd fastapi\nd fastapi-slim\n ..."
     },
     {
       "role": "tool_call",
@@ -35,53 +43,6 @@
     },
     {
       "role": "tool_call",
-      "tool": "grep",
-      "input": {
-        "pattern": "add_middleware|CORSMiddleware|middleware",
-        "include": "*.py",
-        "path": "."
-      },
-      "output_preview": "(no matches)"
-    },
-    {
-      "role": "tool_call",
-      "tool": "find",
-      "input": {
-        "path": ".",
-        "name": "main.py"
-      },
-      "output_preview": "tests/test_modules_same_name_body/app/main.py\ntests/main.py\ndocs_src/settings/app02_py310/main.py\ndocs_src/settings/app01_py310/main.py\ndocs_src/settings/app02_an_py310/main.py\ndocs_src/settings/app03..."
-    },
-    {
-      "role": "assistant",
-      "content": "The grep had no hits, so there's no pre-existing `add_middleware`/CORS call. Let me now dig into the main app entry point, the FastAPI application class, existing middleware tutorials, and the middleware folder \u2014 all at once."
-    },
-    {
-      "role": "tool_call",
-      "tool": "cat",
-      "input": {
-        "path": "tests/main.py"
-      },
-      "output_preview": "import http\n\nfrom fastapi import FastAPI, Path, Query\n\nexternal_docs = {\n    \"description\": \"External API documentation.\",\n    \"url\": \"https://docs.example.com/api-general\",\n}\n\napp = FastAPI(openapi_e..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "codebones_get",
-      "input": {
-        "symbol_or_path": "fastapi/applications.py::FastAPI.middleware"
-      },
-      "output_preview": "def middleware(\n        self,\n        middleware_type: Annotated[\n            str,\n            Doc(\n                \"\"\"\n                The type of middleware. Currently only supports `http`.\n        ..."
-    },
-    {
-      "role": "tool_call",
-      "tool": "ls",
-      "input": {
-        "path": "fastapi/middleware"
-      },
-      "output_preview": "  __init__.py\n  asyncexitstack.py\n  cors.py\n  gzip.py\n  httpsredirect.py\n  trustedhost.py\n  wsgi.py"
-    },
-    {
-      "role": "tool_call",
       "tool": "ls",
       "input": {
         "path": "docs_src"
@@ -89,16 +50,12 @@
       "output_preview": "d additional_responses\nd additional_status_codes\nd advanced_middleware\nd app_testing\nd async_tests\nd authentication_error_status_code\nd background_tasks\nd behind_a_proxy\nd bigger_applications\nd body\nd..."
     },
     {
-      "role": "assistant",
-      "content": "There's a `docs_src/cors` folder and a `fastapi/middleware/cors.py`. Let me read all of those plus the advanced middleware tutorials simultaneously."
-    },
-    {
       "role": "tool_call",
-      "tool": "cat",
+      "tool": "codebones_search",
       "input": {
-        "path": "fastapi/middleware/cors.py"
+        "query": "CORSMiddleware"
       },
-      "output_preview": "from starlette.middleware.cors import CORSMiddleware as CORSMiddleware  # noqa\n"
+      "output_preview": "(no matches)"
     },
     {
       "role": "tool_call",
@@ -123,10 +80,6 @@
         "path": "docs_src/advanced_middleware"
       },
       "output_preview": "  __init__.py\n  tutorial001_py310.py\n  tutorial002_py310.py\n  tutorial003_py310.py"
-    },
-    {
-      "role": "assistant",
-      "content": "Now let me read all four tutorial files in parallel \u2014 CORS, middleware, and advanced middleware examples:"
     },
     {
       "role": "tool_call",
@@ -172,17 +125,75 @@
       "role": "tool_call",
       "tool": "codebones_outline",
       "input": {
-        "path": "fastapi/middleware/__init__.py"
+        "path": "fastapi/applications.py"
       },
-      "output_preview": "from starlette.middleware import Middleware as Middleware\n\n"
+      "output_preview": "from collections.abc import Awaitable, Callable, Coroutine, Sequence\nfrom enum import Enum\nfrom typing import Annotated, Any, TypeVar\n\nfrom annotated_doc import Doc\nfrom fastapi import routing\nfrom fa..."
+    },
+    {
+      "role": "tool_call",
+      "tool": "codebones_get",
+      "input": {
+        "symbol_or_path": "fastapi/applications.py::FastAPI",
+        "filter": "middleware"
+      },
+      "output_preview": "class FastAPI(Starlette):\n    ...\n        ] = None,\n        middleware: Annotated[\n            Sequence[Middleware] | None,\n            Doc(\n                \"\"\"\n                List of middleware to b..."
+    },
+    {
+      "role": "tool_call",
+      "tool": "ls",
+      "input": {
+        "path": "fastapi/middleware"
+      },
+      "output_preview": "  __init__.py\n  asyncexitstack.py\n  cors.py\n  gzip.py\n  httpsredirect.py\n  trustedhost.py\n  wsgi.py"
+    },
+    {
+      "role": "tool_call",
+      "tool": "cat",
+      "input": {
+        "path": "fastapi/middleware/cors.py"
+      },
+      "output_preview": "from starlette.middleware.cors import CORSMiddleware as CORSMiddleware  # noqa\n"
+    },
+    {
+      "role": "tool_call",
+      "tool": "grep",
+      "input": {
+        "pattern": "add_middleware|CORSMiddleware|user_middleware",
+        "path": "fastapi/applications.py"
+      },
+      "output_preview": "(no matches)"
     },
     {
       "role": "assistant",
-      "content": "I now have the complete, authoritative picture. Here's the exact file and code.\n\n---\n\n## What I Found\n\n| Discovery | Detail |\n|---|---|\n| **Primary app file** | `tests/main.py` \u2014 the repo's central FastAPI `app` instance |\n| **CORS middleware class** | Re-exported from Starlette via `fastapi/middleware/cors.py` as `CORSMiddleware` |\n| **Canonical pattern** | `app.add_middleware(SomeMiddleware, **kwargs)` \u2014 seen in `docs_src/cors/tutorial001_py310.py`, `advanced_middleware/tutorial001\u2013003` |\n| **Existing CORS example** | `docs_src/cors/tutorial001_py310.py` \u2014 the exact official pattern to follow |\n| **Zero existing CORS config** | `grep` found no `add_middleware` or `CORSMiddleware` calls anywhere in the live app |\n\n---\n\n## File to Edit\n\n**`tests/main.py`**\n\n---\n\n## Exact Code Change\n\nAdd the import and `add_middleware` call right after the `app = FastAPI(...)` line, following the identical pattern used in `docs_src/cors/tutorial001_py310.py` and the three advanced middleware tutorials:\n\n```python\n# tests/main.py\n\nimport http                                          # (already present)\n\nfrom fastapi import FastAPI, Path, Query             # (already present)\nfrom fastapi.middleware.cors import CORSMiddleware   # \u2190 ADD THIS IMPORT\n\nexternal_docs = {\n    \"description\": \"External API documentation.\",\n    \"url\": \"https://docs.example.com/api-general\",\n}\n\napp = FastAPI(openapi_external_docs=external_docs)   # (already present)\n\n# \u2500\u2500\u2500 ADD THIS BLOCK \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\norigins = [\n    \"http://localhost:3000\",   # React / Create React App default\n    \"http://localhost:5173\",   # Vite default\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,      # only the two origins listed above\n    allow_credentials=True,     # allow cookies / Authorization headers\n    allow_methods=[\"*\"],        # GET, POST, PUT, DELETE, OPTIONS, etc.\n    allow_headers=[\"*\"],        # Content-Type, Authorization, etc.\n)\n# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n# ... rest of the file unchanged\n```\n\n---\n\n## Why Each Decision Was Made\n\n### 1. `from fastapi.middleware.cors import CORSMiddleware`\n`fastapi/middleware/cors.py` contains exactly one line:\n```python\nfrom starlette.middleware.cors import CORSMiddleware as CORSMiddleware  # noqa\n```\nFastAPI re-exports Starlette's `CORSMiddleware` under its own namespace. Importing from `fastapi.middleware.cors` is the canonical path \u2014 matching `docs_src/cors/tutorial001_py310.py` exactly.\n\n### 2. `app.add_middleware(CORSMiddleware, ...)` \u2014 not `@app.middleware(\"http\")`\nThe `@app.middleware(\"http\")` decorator (shown in `docs_src/middleware/tutorial001_py310.py`) is for **custom function-based** middleware. `CORSMiddleware` is a **class-based** Starlette middleware \u2014 it must be registered via `app.add_middleware()`, as confirmed by all three `docs_src/advanced_middleware/` tutorials and the CORS tutorial.\n\n### 3. Placement immediately after `app = FastAPI(...)`\nStarlette wraps middleware in LIFO (last-in, first-out) order around the app. Registering CORS first (closest to the outer edge) ensures preflight `OPTIONS` requests are handled **before** any other middleware or route logic runs \u2014 the correct behaviour for CORS.\n\n### 4. `allow_credentials=True`, `allow_methods=[\"*\"]`, `allow_headers=[\"*\"]`\nThis mirrors the official CORS tutorial pattern and is the safe default for a local dev setup with two known, trusted origins. Because `allow_origins` is an explicit list (not `\"*\"`), using `allow_credentials=True` is valid \u2014 Starlette enforces that you cannot combine `allow_origins=[\"*\"]` with `allow_credentials=True`."
+      "content": "Now I have a complete picture. Let me check the `__init__` signature to confirm `add_middleware` is inherited and how a real app entry point typically looks:"
+    },
+    {
+      "role": "tool_call",
+      "tool": "grep",
+      "input": {
+        "pattern": "add_middleware",
+        "path": "fastapi",
+        "include": "*.py"
+      },
+      "output_preview": "fastapi/applications.py:479:                In FastAPI you would normally do this with `app.add_middleware()`\nfastapi/applications.py:4699:            self.add_middleware(BaseHTTPMiddleware, dispatch=..."
+    },
+    {
+      "role": "tool_call",
+      "tool": "grep",
+      "input": {
+        "pattern": "app = FastAPI\\(\\)|FastAPI()",
+        "path": "docs_src",
+        "include": "*.py"
+      },
+      "output_preview": "(no matches)"
+    },
+    {
+      "role": "assistant",
+      "content": "I now have everything needed. Here's the complete picture and exact code:\n\n---\n\n## What I Found\n\n| File | Role |\n|---|---|\n| `fastapi/middleware/cors.py` | Re-exports `CORSMiddleware` from Starlette \u2014 this is the import path you use |\n| `docs_src/cors/tutorial001_py310.py` | The canonical CORS example in the repo |\n| `docs_src/advanced_middleware/tutorial001\u2013003` | Show the `app.add_middleware(MiddlewareClass, **kwargs)` pattern |\n| `fastapi/applications.py` | `FastAPI` class \u2014 `add_middleware()` is inherited from Starlette's `build_middleware_stack`, which wraps all `user_middleware` around the app |\n\nThe pattern is **always the same**: import the middleware class, build an `origins` list, call `app.add_middleware()` **before any route definitions**.\n\n---\n\n## File to Edit\n\nYour application entry point \u2014 wherever you have `app = FastAPI()`. Based on the repo's own canonical example, that is:\n\n**`docs_src/cors/tutorial001_py310.py`** (the existing CORS tutorial file), or in your own project, the file containing `app = FastAPI()`.\n\n---\n\n## Exact Code to Add\n\nReplace the `origins` list and `add_middleware` call. Here is the complete, production-ready version:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware  # re-exported from starlette\n\napp = FastAPI()\n\n# \u2500\u2500 CORS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\norigins = [\n    \"http://localhost:3000\",   # e.g. Create React App / Next.js dev server\n    \"http://localhost:5173\",   # e.g. Vite dev server\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,       # which origins may make cross-origin requests\n    allow_credentials=True,      # allow cookies / Authorization headers\n    allow_methods=[\"*\"],         # GET, POST, PUT, DELETE, OPTIONS, etc.\n    allow_headers=[\"*\"],         # Content-Type, Authorization, etc.\n)\n# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n\n@app.get(\"/\")\nasync def main():\n    return {\"message\": \"Hello World\"}\n```\n\n---\n\n## Why Each Piece Is Here\n\n### `from fastapi.middleware.cors import CORSMiddleware`\n`fastapi/middleware/cors.py` is a one-liner re-export:\n```python\n# fastapi/middleware/cors.py\nfrom starlette.middleware.cors import CORSMiddleware as CORSMiddleware  # noqa\n```\nThis is the stable FastAPI-blessed import path (not `starlette.middleware.cors` directly).\n\n### `app.add_middleware(CORSMiddleware, ...)` \u2014 **before routes**\n`FastAPI.build_middleware_stack()` in `fastapi/applications.py` assembles the stack as:\n```\nServerErrorMiddleware\n  \u2192 [your user_middleware, in reverse registration order]   \u2190 CORSMiddleware lands here\n    \u2192 ExceptionMiddleware\n      \u2192 AsyncExitStackMiddleware\n        \u2192 Router (your routes)\n```\n`add_middleware()` **appends** to `user_middleware`, so calling it before routes ensures it is in the stack before any request reaches a route handler. CORS preflight `OPTIONS` requests are intercepted and short-circuited at the middleware layer \u2014 they never reach your route functions.\n\n### Parameter choices\n\n| Parameter | Value | Reason |\n|---|---|---|\n| `allow_origins` | explicit list | Only the two local dev origins are trusted \u2014 never use `[\"*\"]` with `allow_credentials=True` |\n| `allow_credentials` | `True` | Allows the browser to send cookies and `Authorization` headers cross-origin |\n| `allow_methods` | `[\"*\"]` | Permits all HTTP methods; narrow this (e.g. `[\"GET\",\"POST\"]`) for stricter APIs |\n| `allow_headers` | `[\"*\"]` | Reflects any request header back; narrow to e.g. `[\"Content-Type\",\"Authorization\"]` for stricter APIs |\n\n> \u26a0\ufe0f **Security note:** `allow_origins=[\"*\"]` and `allow_credentials=True` together are **invalid** per the CORS spec and Starlette will raise a `ValueError`. Always use an explicit origins list when credentials are enabled."
     },
     {
       "role": "final_answer",
-      "content": "I now have the complete, authoritative picture. Here's the exact file and code.\n\n---\n\n## What I Found\n\n| Discovery | Detail |\n|---|---|\n| **Primary app file** | `tests/main.py` \u2014 the repo's central FastAPI `app` instance |\n| **CORS middleware class** | Re-exported from Starlette via `fastapi/middleware/cors.py` as `CORSMiddleware` |\n| **Canonical pattern** | `app.add_middleware(SomeMiddleware, **kwargs)` \u2014 seen in `docs_src/cors/tutorial001_py310.py`, `advanced_middleware/tutorial001\u2013003` |\n| **Existing CORS example** | `docs_src/cors/tutorial001_py310.py` \u2014 the exact official pattern to follow |\n| **Zero existing CORS config** | `grep` found no `add_middleware` or `CORSMiddleware` calls anywhere in the live app |\n\n---\n\n## File to Edit\n\n**`tests/main.py`**\n\n---\n\n## Exact Code Change\n\nAdd the import and `add_middleware` call right after the `app = FastAPI(...)` line, following the identical pattern used in `docs_src/cors/tutorial001_py310.py` and the three advanced middleware tutorials:\n\n```python\n# tests/main.py\n\nimport http                                          # (already present)\n\nfrom fastapi import FastAPI, Path, Query             # (already present)\nfrom fastapi.middleware.cors import CORSMiddleware   # \u2190 ADD THIS IMPORT\n\nexternal_docs = {\n    \"description\": \"External API documentation.\",\n    \"url\": \"https://docs.example.com/api-general\",\n}\n\napp = FastAPI(openapi_external_docs=external_docs)   # (already present)\n\n# \u2500\u2500\u2500 ADD THIS BLOCK \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\norigins = [\n    \"http://localhost:3000\",   # React / Create React App default\n    \"http://localhost:5173\",   # Vite default\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,      # only the two origins listed above\n    allow_credentials=True,     # allow cookies / Authorization headers\n    allow_methods=[\"*\"],        # GET, POST, PUT, DELETE, OPTIONS, etc.\n    allow_headers=[\"*\"],        # Content-Type, Authorization, etc.\n)\n# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500"
+      "content": "I now have everything needed. Here's the complete picture and exact code:\n\n---\n\n## What I Found\n\n| File | Role |\n|---|---|\n| `fastapi/middleware/cors.py` | Re-exports `CORSMiddleware` from Starlette \u2014 this is the import path you use |\n| `docs_src/cors/tutorial001_py310.py` | The canonical CORS example in the repo |\n| `docs_src/advanced_middleware/tutorial001\u2013003` | Show the `app.add_middleware(MiddlewareClass, **kwargs)` pattern |\n| `fastapi/applications.py` | `FastAPI` class \u2014 `add_middleware()` is inherited from Starlette's `build_middleware_stack`, which wraps all `user_middleware` around the app |\n\nThe pattern is **always the same**: import the middleware class, build an `origins` list, call `app.add_middleware()` **before any route definitions**.\n\n---\n\n## File to Edit\n\nYour application entry point \u2014 wherever you have `app = FastAPI()`. Based on the repo's own canonical example, that is:\n\n**`docs_src/cors/tutorial001_py310.py`** (the existing CORS tutorial file), or in your own project, the file containing `app = FastAPI()`.\n\n---\n\n## Exact Code to Add\n\nReplace the `origins` list and `add_middleware` call. Here is the complete, production-ready version:\n\n```python\nfrom fastapi import FastAPI\nfrom fastapi.middleware.cors import CORSMiddleware  # re-exported from starlette\n\napp = FastAPI()\n\n# \u2500\u2500 CORS \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\norigins = [\n    \"http://localhost:3000\",   # e.g. Create React App / Next.js dev server\n    \"http://localhost:5173\",   # e.g. Vite dev server\n]\n\napp.add_middleware(\n    CORSMiddleware,\n    allow_origins=origins,       # which origins may make cross-origin requests\n    allow_credentials=True,      # allow cookies / Authorization headers\n    allow_methods=[\"*\"],         # GET, POST, PUT, DELETE, OPTIONS, etc.\n    allow_headers=[\"*\"],         # Content-Type, Authorization, etc.\n)\n# \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\n\n@app.get(\"/\")\nasync def main():\n    return"
     }
   ]
 }

@@ -33,11 +33,11 @@ Two Claude Sonnet agents solve the same task on [FastAPI](https://github.com/tia
 
 | Task | Standard only | Standard + codebones | Tokens | Turns |
 |------|---:|---:|---:|---:|
-| Add CORS middleware | 53K tokens, 30 calls, 12 turns | 22K tokens, 17 calls, 5 turns | **2.4x fewer** | **58% fewer** |
-| Trace dependency bug | 122K tokens, 33 calls, 20 turns | 211K tokens, 33 calls, 20 turns | 0.6x (worse) | even |
-| Refactor impact analysis | 156K tokens, 44 calls, 20 turns | 164K tokens, 41 calls, 17 turns | ~even | 15% fewer |
+| Add CORS middleware | 58K tokens, 25 calls, 13 turns | 37K tokens, 19 calls, 9 turns | **1.6x fewer** | **31% fewer** |
+| Refactor impact analysis | 163K tokens, 41 calls, 20 turns | 31K tokens, 14 calls, 6 turns | **5.2x fewer** | **70% fewer** |
+| Trace dependency bug | 110K tokens, 28 calls, 20 turns | 196K tokens, 28 calls, 19 turns | 0.6x (worse) | even |
 
-codebones wins on implementation tasks where `search` + `get` replace directory browsing. It loses on deep code tracing where `get` returns full function bodies that accumulate in conversation history — grep's line-level fragments are leaner there. Full conversation logs in [docs/benchmarks/](docs/benchmarks/agent-eval-results/).
+`codebones graph` is the standout — one call returns the blast radius for a file, replacing 41 grep/ls calls across 20 turns. For implementation tasks, `search` + `get --filter` replace directory browsing. Deep code tracing (reading full function bodies to understand logic) still favors grep's line-level output. Full conversation logs in [docs/benchmarks/](docs/benchmarks/agent-eval-results/).
 
 ## Install
 
@@ -226,7 +226,8 @@ codebones map [dir] [options]                Skeleton map only (shorthand for pa
 codebones pack <dir> [options]               Pack repo into LLM-ready payload
 codebones graph [file] [options]             Import graph, hot files, or blast radius
 codebones search [--dir <repo>] <query>      Substring search across symbol names
-codebones get [--dir <repo>] <symbol>        Retrieve full source by symbol ID or file path
+codebones get [--dir <repo>] <symbol>        Retrieve source by symbol ID or file path
+                                             Use --filter <keyword> for matching lines only
 codebones outline [--dir <repo>] <path>      Skeleton view of an indexed file
 ```
 
@@ -249,13 +250,19 @@ codebones outline [--dir <repo>] <path>      Skeleton view of an indexed file
 | `--no-file-summary` | File contents only, no skeleton map |
 | `--remove-comments` | Strip comments from output |
 
+### `get` options
+
+| Flag | Description |
+|---|---|
+| `--filter <keyword>` | Return signature + lines matching keyword (with 1 line of context). Small functions (≤10 lines) return in full. |
+
 ### `graph` options
 
 | Flag | Description |
 |---|---|
-| `<file>` | Show blast radius for this file (omit for full graph) |
+| `<file>` | Show blast radius for this file, including what each affected file imports (omit for full graph) |
 | `--format markdown\|xml\|json` | Output format (default: markdown) |
-| `--top N` | Show only the N most-imported files |
+| `--top N` | Show only the N most-imported files (default: 50) |
 | `--depth N` | Blast radius BFS depth (default: 3) |
 
 ## Plugins
