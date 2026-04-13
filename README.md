@@ -21,19 +21,11 @@ The core metric: how many tokens does an AI need to orient in your codebase?
 
 | Project | Raw source | codebones map | Reduction |
 |---|---:|---:|---:|
-| [agenthelm](https://github.com/hadywalied/agenthelm) (6.25K LOC, Python) | 43,146 | 5,808 | **7x** |
+| [FastAPI](https://github.com/tiangolo/fastapi) (107K LOC, Python) | 689,433 | 83,751 | **8x** |
 | [temporal](https://github.com/temporalio/temporal) (833K LOC, Go) | 7,337,966 | 298,330 | **25x** |
 | [n8n](https://github.com/n8n-io/n8n) (2.07M LOC, TypeScript) | 14,945,989 | 690,544 | **22x** |
 
-Verified with actual API calls to Claude Sonnet and Opus on [agenthelm](https://github.com/hadywalied/agenthelm):
-
-| Task | Raw source | codebones | Input token reduction |
-|---|---:|---:|---:|
-| Project orientation | 29,307 | 8,744 | **3.5x** |
-| Impact analysis | 29,067 | 307 | **443x** |
-| Symbol retrieval | 29,525 | 1,830 | **27x** |
-
-Impact analysis is the standout — `codebones graph` returns the blast radius in ~300 tokens instead of sending the entire codebase.
+For targeted queries the savings are even larger — `codebones graph fastapi/routing.py` returns the blast radius in ~500 tokens instead of sending the entire codebase. Full agent eval with conversation logs in [docs/benchmarks/](docs/benchmarks/).
 
 Full benchmark methodology and reproducible scripts in [docs/benchmarks/](docs/benchmarks/).
 
@@ -166,7 +158,7 @@ All numbers are cold-start medians in milliseconds. Full methodology and raw dat
 
 | Dataset | codebones | ast-grep | grep-ast | tree-sitter-mcp | jcodemunch-mcp |
 |---|---:|---:|---:|---:|---:|
-| agenthelm (6.25K LOC, Python) | **4.02** | 11.93 | 484.22 | 196.19 | 58.50 |
+| 6.25K LOC (Python) | **4.02** | 11.93 | 484.22 | 196.19 | 58.50 |
 | temporal (833K LOC, Go) | **10.45** | 432.79 | 8,208.27 | TIMEOUT | 199.83 |
 | n8n (2.07M LOC, TypeScript) | **11.82** | 1,998.44 | TIMEOUT | TIMEOUT | 104.54 |
 
@@ -174,7 +166,7 @@ All numbers are cold-start medians in milliseconds. Full methodology and raw dat
 
 | Dataset | codebones | repomix |
 |---|---:|---:|
-| agenthelm (6.25K LOC, Python) | **101** | 947 |
+| 6.25K LOC (Python) | **101** | 947 |
 | temporal (833K LOC, Go) | **4,025** | 10,237 |
 | n8n (2.07M LOC, TypeScript) | **8,511** | 11,548 |
 
@@ -182,7 +174,7 @@ All numbers are cold-start medians in milliseconds. Full methodology and raw dat
 
 | Dataset | graph | map |
 |---|---:|---:|
-| agenthelm (6.25K LOC, Python) | **26ms** | **32ms** |
+| 6.25K LOC (Python) | **26ms** | **32ms** |
 | temporal (833K LOC, Go) | **39ms** | **303ms** |
 | n8n (2.07M LOC, TypeScript) | **56ms** | **1,369ms** |
 

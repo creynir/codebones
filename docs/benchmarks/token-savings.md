@@ -8,7 +8,7 @@ Same pinned repos as the speed benchmarks:
 
 | Label | Repo | LOC | Language | Commit |
 |---|---|---:|---|---|
-| small | [hadywalied/agenthelm](https://github.com/hadywalied/agenthelm) | 6,250 | Python | `9ec76caae764` |
+| small | [tiangolo/fastapi](https://github.com/tiangolo/fastapi) | 107,493 | Python | `eba8942c81db` |
 | medium | [temporalio/temporal](https://github.com/temporalio/temporal) | 832,991 | Go | `29a039286526` |
 | large | [n8n-io/n8n](https://github.com/n8n-io/n8n) | 2,068,515 | TypeScript | `f7a787aca81c` |
 
@@ -64,20 +64,33 @@ At budgets of 8K, 16K, 32K, and 64K tokens:
 
 **Measured:** number of symbols visible to the AI at each budget level. Codebones preserves the skeleton map (all symbols) even when file bodies are dropped; raw truncation loses everything after the cutoff.
 
-## Running the benchmark
+## Agent Eval (Real-World Benchmark)
+
+The static scenarios above count tokens but don't capture what actually happens when an AI agent works on a codebase. The agent eval runs the same tasks as multi-turn agentic conversations through the Claude API on [FastAPI](https://github.com/tiangolo/fastapi) (107K LOC, Python).
+
+Two agents solve each task:
+- **Standard agent** — gets `grep`, `cat`, `find`, `ls`. Explores iteratively.
+- **Codebones agent** — gets `codebones_map`, `codebones_search`, `codebones_get`, `codebones_graph`, `codebones_outline`.
+
+Total tokens are measured across the full conversation (all turns, all tool calls). Every conversation is saved as a JSON log for inspection.
+
+See [methodology.md](methodology.md) for the full protocol and [agent-eval-results/](agent-eval-results/) for conversation logs.
+
+## Running the benchmarks
 
 ```bash
-# Prerequisites: codebones built and in PATH, Python 3 with tiktoken
-cargo install --path crates/cli
-pip install tiktoken
+# Prerequisites: codebones built, Python 3 with tiktoken
+cargo build --release -p codebones
+pip install tiktoken anthropic
 
-# Run all scenarios (clones datasets into lab/ on first run)
+# Static token savings (clones datasets into lab/ on first run)
 ./docs/benchmarks/run_token_savings.sh
 
-# Output: docs/benchmarks/token-savings.csv
+# Agent eval on FastAPI (requires API key)
+ANTHROPIC_API_KEY=your-key python3 docs/benchmarks/run_agent_eval.py
 ```
 
-The script is self-contained — it clones each dataset into `lab/` at the pinned commit on first run. Subsequent runs reuse the existing clones. The `lab/` directory is gitignored.
+Both scripts are self-contained — they clone datasets into `lab/` at pinned commits on first run. The `lab/` directory is gitignored.
 
 ## Token counting
 

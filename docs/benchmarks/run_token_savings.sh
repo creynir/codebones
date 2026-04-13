@@ -28,7 +28,7 @@ fi
 
 # Dataset definitions: label,git_url,pinned_commit
 DATASETS=(
-    "small,https://github.com/hadywalied/agenthelm.git,9ec76caae764"
+    "small,https://github.com/tiangolo/fastapi.git,eba8942c81db"
     "medium,https://github.com/temporalio/temporal.git,29a039286526"
     "large,https://github.com/n8n-io/n8n.git,f7a787aca81c"
 )

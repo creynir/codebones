@@ -2,13 +2,23 @@
 
 ## Datasets
 
-Three open-source projects of increasing scale, each pinned at a specific commit for reproducibility. Datasets are automatically cloned into `lab/` at the repo root on first benchmark run.
+Open-source projects pinned at specific commits for reproducibility. Datasets are automatically cloned into `lab/` on first benchmark run.
+
+### Speed + Static Token Benchmarks
 
 | Label | Repo | Language | Code Files | LOC | Commit |
 |---|---|---|---:|---:|---|
-| small | [hadywalied/agenthelm](https://github.com/hadywalied/agenthelm) | Python | 53 | 6,250 | `9ec76caae764` |
+| small | [tiangolo/fastapi](https://github.com/tiangolo/fastapi) | Python | 1,121 | 107,493 | `eba8942c81db` |
 | medium | [temporalio/temporal](https://github.com/temporalio/temporal) | Go | 2,531 | 832,991 | `29a039286526` |
 | large | [n8n-io/n8n](https://github.com/n8n-io/n8n) | TypeScript | 10,454 | 2,068,515 | `f7a787aca81c` |
+
+### Agent Eval
+
+| Repo | Language | Code Files | LOC | Commit |
+|---|---|---:|---:|---|
+| [tiangolo/fastapi](https://github.com/tiangolo/fastapi) | Python | 1,121 | 107,493 | `eba8942c81db` |
+
+FastAPI is used for the agent eval because it's universally recognized — developers can intuit the codebase size and judge whether the AI's answers are correct.
 
 ## Benchmark Categories
 
@@ -37,7 +47,6 @@ Measures wall-clock latency of codebones operations vs competitors.
 #### Command Patterns
 
 ```bash
-# Speed benchmarks (codebones)
 codebones index .
 codebones search <query>
 codebones outline <file>
@@ -47,66 +56,64 @@ codebones graph --dir . --format markdown
 codebones graph <file> --dir . --depth 3
 ```
 
-### 2. Token Savings Benchmarks
-
-Measures how many tokens an AI agent needs to consume for common tasks — with codebones vs reading raw source files. Two tiers:
-
-#### Tier 1: Static Token Counting
+### 2. Static Token Savings
 
 Model-agnostic. Counts tokens in codebones output vs raw source using tiktoken (cl100k_base). No API calls required.
 
 | Scenario | Without codebones | With codebones |
 |----------|-------------------|----------------|
 | **Orientation** | All source files | `codebones map` |
-| **Impact analysis** | All source files (manual import tracing) | `codebones graph <file>` |
+| **Impact analysis** | All source files | `codebones graph <file>` |
 | **Symbol retrieval** | Full file content | `codebones search` + `codebones get` |
 | **Budget efficiency** | Hard truncation at N tokens | `codebones pack --max-tokens N` |
 
 Metrics: raw token count, codebones token count, reduction ratio.
 
-#### Tier 2: LLM Evaluation (Sonnet + Opus)
+### 3. Agent Eval (Sonnet on FastAPI)
 
-Sends identical tasks to Claude Sonnet and Opus, once with raw file context and once with codebones context. Measures actual API token usage and answer quality.
+The real-world benchmark. Two agents solve the same task on FastAPI — one with standard tools (grep, cat, find, ls), one with codebones tools (map, search, get, graph, outline). Both run as multi-turn agentic conversations with Claude Sonnet via the API.
 
 **Requires:** `ANTHROPIC_API_KEY` environment variable.
 
-**Tasks per dataset:**
-1. "Describe the architecture of this project." (orientation)
-2. "What files would be affected if I changed `<hot_file>`?" (impact analysis)
-3. "Find and explain the function `<symbol>`." (symbol retrieval)
+#### What each agent gets
 
-**Metrics per task:**
-- `input_tokens` — tokens sent to the model
-- `output_tokens` — tokens in the response
+| Agent | Tools | How it works |
+|-------|-------|-------------|
+| **Standard** | `grep`, `cat`, `find`, `ls` | Explores iteratively — greps for patterns, reads files, follows imports manually |
+| **Codebones** | `codebones_map`, `codebones_search`, `codebones_get`, `codebones_graph`, `codebones_outline` | Queries the structural index — gets the skeleton map, searches symbols, reads targeted code |
+
+Both agents get the same system prompt (adjusted for their tool set) and the same user task. Neither is told how to approach the problem — they figure out their own exploration strategy.
+
+#### Tasks
+
+1. **Orientation** — "Describe the architecture of this project. What are the main modules, their responsibilities, and how they relate to each other? Be specific about file paths."
+2. **Impact analysis** — "I need to refactor `fastapi/routing.py`. What other files in this project would be affected by changes to that file? List them and explain the dependency chain."
+3. **Symbol retrieval** — "Find the `APIRouter` class, explain its main methods and how it's used by the rest of the codebase."
+
+#### Metrics per task
+
+- `total_input_tokens` — total tokens sent to the model across all turns
+- `total_output_tokens` — total tokens generated across all turns
 - `total_tokens` — input + output
-- `correctness` — manual or automated check against ground truth
-- `model` — `claude-sonnet-4-6` or `claude-opus-4-6`
+- `tool_calls` — number of tool invocations
+- `turns` — number of conversation turns
+- `final_answer` — the agent's complete answer (saved for manual review)
 
-**Protocol:**
-1. For each (dataset, task, model) triple, run with raw context and codebones context
-2. Raw context: concatenate all source files up to model's context limit
-3. Codebones context: appropriate command output (map, graph, search+get)
-4. Record all token counts from the API response `usage` field
-5. Each run is a single API call (no multi-turn)
+#### What makes this credible
+
+Every conversation is saved as a JSON log in `agent-eval-results/`. Readers can inspect:
+- The exact prompts
+- Every tool call and its result
+- The agent's reasoning
+- The final answer
+- The token counts from the API `usage` field
+
+No synthetic context, no cherry-picked examples. The agent decides what to explore and how.
 
 ### Runtime States
 - `OK`: completed and passed correctness checks.
-- `TIMEOUT`: exceeded timeout, report exact `timeout_ms`.
+- `TIMEOUT`: exceeded timeout.
 - `ERROR`: non-zero exit or correctness failed.
-- `OUT_OF_SCOPE`: non-eligible pair.
-
-## Correctness Validation
-
-### Lookup Golden Suite
-For each dataset, a deterministic marker function is injected. Query must return marker hit. Metrics: `hit@k`, `precision@k`, `recall@k`.
-
-### Feature-specific checks
-- `repo_index_build`: index exists and `lookup_query` succeeds.
-- `structure_outline`: output non-empty and parses as valid structure payload.
-- `context_pack`: non-empty output, stable format.
-- `skeleton_map`: output contains skeleton entries, no `<content>` blocks.
-- `dependency_graph`: output contains file entries with import counts.
-- `blast_radius`: output contains affected file list.
 
 ## Running Benchmarks
 
@@ -114,11 +121,11 @@ For each dataset, a deterministic marker function is injected. Query must return
 # All benchmarks auto-clone datasets into lab/ on first run.
 # lab/ is gitignored.
 
-# Token savings (static + LLM)
+# Static token savings
 ./docs/benchmarks/run_token_savings.sh
 
-# Speed benchmarks
-# (orchestration script — run manually per the command patterns above)
+# Agent eval (requires ANTHROPIC_API_KEY)
+ANTHROPIC_API_KEY=your-key python3 docs/benchmarks/run_agent_eval.py
 ```
 
 ## Deliverables
@@ -127,6 +134,9 @@ For each dataset, a deterministic marker function is injected. Query must return
 - `docs/benchmarks/raw.csv` — raw speed data
 - `docs/benchmarks/correctness.csv` — correctness validation
 - `docs/benchmarks/normalized.csv` — normalized speed metrics
-- `docs/benchmarks/token-savings.md` — token savings scenarios
-- `docs/benchmarks/token-savings.csv` — token savings results (generated)
-- `docs/benchmarks/run_token_savings.sh` — self-contained benchmark script
+- `docs/benchmarks/token-savings.md` — static token savings scenarios
+- `docs/benchmarks/token-savings.csv` — static token savings results (generated)
+- `docs/benchmarks/run_token_savings.sh` — static benchmark script
+- `docs/benchmarks/run_agent_eval.py` — agent eval script
+- `docs/benchmarks/agent-eval.csv` — agent eval results (generated)
+- `docs/benchmarks/agent-eval-results/` — full conversation logs (generated)
