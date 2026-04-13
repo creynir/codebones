@@ -3014,3 +3014,153 @@ fn search_unchanged_returns_only_symbol_ids() -> Result<(), Box<dyn std::error::
     }
     Ok(())
 }
+
+// ===========================================================================
+// api::get() --filter tests (failing — implementation not yet written)
+// ===========================================================================
+
+/// Fixture: a Rust file with a large function (>10 lines, two "target" occurrences)
+/// and a small function (≤10 lines, one "target" occurrence).
+const FILTER_FIXTURE: &str = r#"pub fn big_function(x: i32) -> i32 {
+    let a = 1;
+    let b = 2;
+    let c = 3;
+    let target_value = x * 2;
+    let d = 4;
+    let e = 5;
+    let f = 6;
+    let g = 7;
+    let another_target = x * 3;
+    let h = 8;
+    let i = 9;
+    target_value + another_target
+}
+
+pub fn small_fn(x: i32) -> i32 {
+    let target = x + 1;
+    target
+}
+"#;
+
+/// AC1 + AC5 + AC6: filtered get on a large function returns the signature,
+/// matching lines with 1-line context, and "..." for skipped regions.
+#[test]
+fn get_with_filter_returns_signature_and_matching_lines_with_context(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "filter_fixture.rs", FILTER_FIXTURE);
+    api::index(dir.path())?;
+
+    let result = api::get(dir.path(), "filter_fixture.rs::big_function", Some("target"))?;
+
+    // AC6: function signature is always included
+    assert!(
+        result.contains("pub fn big_function"),
+        "filtered output must include the function signature; got: {result}"
+    );
+
+    // AC1 + AC4: matched lines appear in the output
+    assert!(
+        result.contains("target_value"),
+        "filtered output must include lines containing 'target'; got: {result}"
+    );
+    assert!(
+        result.contains("another_target"),
+        "filtered output must include all lines containing 'target'; got: {result}"
+    );
+
+    // AC5: non-matching regions between matches are elided with "..."
+    assert!(
+        result.contains("..."),
+        "non-matching lines between regions must be replaced with '...'; got: {result}"
+    );
+
+    // Lines far from any match should not appear verbatim
+    assert!(
+        !result.contains("let a = 1"),
+        "lines far from any match should be elided; got: {result}"
+    );
+
+    Ok(())
+}
+
+/// AC4: each match has 1 line of context before AND after.
+#[test]
+fn get_with_filter_includes_one_line_of_context_around_each_match(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "filter_fixture.rs", FILTER_FIXTURE);
+    api::index(dir.path())?;
+
+    let result = api::get(dir.path(), "filter_fixture.rs::big_function", Some("target"))?;
+
+    // Line before "let target_value = x * 2" is "let c = 3;" — must appear as context
+    assert!(
+        result.contains("let c = 3"),
+        "line immediately before first match must appear as context; got: {result}"
+    );
+
+    // Line after "let target_value = x * 2" is "let d = 4;" — must appear as context
+    assert!(
+        result.contains("let d = 4"),
+        "line immediately after first match must appear as context; got: {result}"
+    );
+
+    Ok(())
+}
+
+/// AC2: unfiltered get (None) still returns the full source unchanged.
+#[test]
+fn get_without_filter_returns_full_source_unchanged() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "filter_fixture.rs", FILTER_FIXTURE);
+    api::index(dir.path())?;
+
+    let result = api::get(dir.path(), "filter_fixture.rs::big_function", None)?;
+
+    // Every line of the big function must be present
+    assert!(
+        result.contains("let a = 1"),
+        "unfiltered get must return full source; 'let a = 1' missing; got: {result}"
+    );
+    assert!(
+        result.contains("target_value + another_target"),
+        "unfiltered get must include the return line; got: {result}"
+    );
+
+    // Must NOT contain the elision marker
+    assert!(
+        !result.contains("..."),
+        "unfiltered get must not elide any lines; got: {result}"
+    );
+
+    Ok(())
+}
+
+/// AC3: small functions (≤10 lines) return in full even when a filter is provided.
+#[test]
+fn get_with_filter_returns_small_function_in_full() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "filter_fixture.rs", FILTER_FIXTURE);
+    api::index(dir.path())?;
+
+    let result = api::get(dir.path(), "filter_fixture.rs::small_fn", Some("target"))?;
+
+    // All lines of small_fn must be present — no elision
+    assert!(
+        result.contains("pub fn small_fn"),
+        "small function signature must appear; got: {result}"
+    );
+    assert!(
+        result.contains("let target = x + 1"),
+        "small function body must appear in full; got: {result}"
+    );
+
+    // Small functions must not be elided even if non-matching lines exist
+    assert!(
+        !result.contains("..."),
+        "small function (≤10 lines) must never be elided; got: {result}"
+    );
+
+    Ok(())
+}

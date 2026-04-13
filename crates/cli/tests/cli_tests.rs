@@ -1690,3 +1690,120 @@ fn test_map_explicit_max_tokens_8000_truncates() {
     );
 }
 
+
+// ===========================================================================
+// CLI: get --filter tests (failing — CLI flag not yet implemented)
+// ===========================================================================
+
+/// AC7: `codebones get <symbol> --filter <pattern>` passes the filter through
+/// and returns signature + matched lines (not the full source).
+#[test]
+fn test_get_filter_returns_matching_lines_not_full_source() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let fixture = r#"pub fn big_function(x: i32) -> i32 {
+    let a = 1;
+    let b = 2;
+    let c = 3;
+    let target_value = x * 2;
+    let d = 4;
+    let e = 5;
+    let f = 6;
+    let g = 7;
+    let another_target = x * 3;
+    let h = 8;
+    let i = 9;
+    target_value + another_target
+}
+
+pub fn small_fn(x: i32) -> i32 {
+    let target = x + 1;
+    target
+}
+"#;
+    fs::write(root.join("filter_fixture.rs"), fixture).unwrap();
+
+    // Index
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["index", "."])
+        .assert()
+        .success();
+
+    // get with --filter should include matching lines and the signature
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["get", "filter_fixture.rs::big_function", "--filter", "target"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+
+    assert!(
+        stdout.contains("pub fn big_function"),
+        "filtered CLI output must include the function signature; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("target_value"),
+        "filtered CLI output must include matching lines; got: {stdout}"
+    );
+    assert!(
+        stdout.contains("..."),
+        "filtered CLI output must elide non-matching regions with '...'; got: {stdout}"
+    );
+
+    // Lines far from any match must NOT appear
+    assert!(
+        !stdout.contains("let a = 1"),
+        "lines far from matches must be elided in CLI --filter output; got: {stdout}"
+    );
+}
+
+/// AC8: `codebones get <symbol>` without --filter still returns full source.
+#[test]
+fn test_get_without_filter_still_returns_full_source() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path();
+
+    let fixture = r#"pub fn big_function(x: i32) -> i32 {
+    let a = 1;
+    let b = 2;
+    let c = 3;
+    let target_value = x * 2;
+    let d = 4;
+    let e = 5;
+    let f = 6;
+    let g = 7;
+    let another_target = x * 3;
+    let h = 8;
+    let i = 9;
+    target_value + another_target
+}
+"#;
+    fs::write(root.join("filter_fixture.rs"), fixture).unwrap();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["index", "."])
+        .assert()
+        .success();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["get", "filter_fixture.rs::big_function"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("let a = 1")
+                .and(predicate::str::contains("target_value + another_target"))
+                .and(predicate::str::contains("pub fn big_function")),
+        );
+}
