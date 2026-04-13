@@ -33,6 +33,9 @@ async fn mcp_server_exposes_real_tools_over_transport() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"outline"));
     assert!(tool_names.contains(&"get"));
     assert!(tool_names.contains(&"search"));
+    assert!(tool_names.contains(&"map"), "map tool must be registered; got: {:?}", tool_names);
+    assert!(tool_names.contains(&"graph"), "graph tool must be registered; got: {:?}", tool_names);
+    assert!(tool_names.contains(&"graph_file"), "graph_file tool must be registered; got: {:?}", tool_names);
 
     let index_result = client
         .call_tool(
@@ -120,6 +123,90 @@ async fn mcp_server_exposes_real_tools_over_transport() -> anyhow::Result<()> {
         .map(|text| text.text.as_str())
         .expect("outline response should include text content");
     assert!(outline_text.contains("pub fn compat()"));
+
+    // --- map tool: returns skeleton without file contents ---
+    let map_result = client
+        .call_tool(
+            CallToolRequestParams::new("map").with_arguments(
+                rmcp::serde_json::json!({
+                    "dir": dir.path().to_string_lossy(),
+                })
+                .as_object()
+                .expect("map arguments must be an object")
+                .clone(),
+            ),
+        )
+        .await?;
+
+    let map_text = map_result
+        .content
+        .first()
+        .and_then(|content| content.raw.as_text())
+        .map(|text| text.text.as_str())
+        .expect("map response should include text content");
+    assert!(
+        map_text.contains("lib.rs"),
+        "map output must contain the indexed file; got: {}",
+        map_text
+    );
+    assert!(
+        map_text.contains("compat"),
+        "map output must contain the symbol name; got: {}",
+        map_text
+    );
+
+    // --- graph tool: returns import graph ---
+    let graph_result = client
+        .call_tool(
+            CallToolRequestParams::new("graph").with_arguments(
+                rmcp::serde_json::json!({
+                    "dir": dir.path().to_string_lossy(),
+                })
+                .as_object()
+                .expect("graph arguments must be an object")
+                .clone(),
+            ),
+        )
+        .await?;
+
+    let graph_text = graph_result
+        .content
+        .first()
+        .and_then(|content| content.raw.as_text())
+        .map(|text| text.text.as_str())
+        .expect("graph response should include text content");
+    assert!(
+        graph_text.contains("lib.rs"),
+        "graph output must contain indexed files; got: {}",
+        graph_text
+    );
+
+    // --- graph_file tool: returns blast radius ---
+    let graph_file_result = client
+        .call_tool(
+            CallToolRequestParams::new("graph_file").with_arguments(
+                rmcp::serde_json::json!({
+                    "dir": dir.path().to_string_lossy(),
+                    "file": "lib.rs",
+                })
+                .as_object()
+                .expect("graph_file arguments must be an object")
+                .clone(),
+            ),
+        )
+        .await?;
+
+    let graph_file_text = graph_file_result
+        .content
+        .first()
+        .and_then(|content| content.raw.as_text())
+        .map(|text| text.text.as_str())
+        .expect("graph_file response should include text content");
+    assert!(
+        graph_file_text.contains("Blast Radius"),
+        "graph_file output must contain blast radius header; got: {}",
+        graph_file_text
+    );
 
     client.cancel().await?;
     server_handle.await??;
