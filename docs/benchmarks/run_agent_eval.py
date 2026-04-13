@@ -425,26 +425,96 @@ TASKS = [
 # Main
 # ---------------------------------------------------------------------------
 
+REPO_TASKS = {
+    "fastapi": [
+        {
+            "name": "implement_middleware",
+            "prompt": (
+                "Add a CORS middleware to the FastAPI application that allows origins from "
+                "http://localhost:3000 and http://localhost:5173. Find where middleware is "
+                "configured, look at existing middleware examples as a pattern, and write "
+                "the code. Show me the exact file to edit and the code to add."
+            ),
+        },
+        {
+            "name": "fix_bug",
+            "prompt": (
+                "I'm getting a TypeError when using `Depends()` with an async generator "
+                "that yields None. Find the dependency resolution code, trace how generator "
+                "dependencies are handled, and identify where the bug might be. Show me "
+                "the relevant code paths."
+            ),
+        },
+        {
+            "name": "refactor_impact",
+            "prompt": (
+                "I'm planning to refactor `fastapi/routing.py` to split the route handling "
+                "logic into smaller modules. Before I start, I need to know: what files "
+                "depend on routing.py? What functions from routing.py are imported elsewhere? "
+                "Give me a complete list of everything that would break and needs updating."
+            ),
+        },
+    ],
+    "n8n": [
+        {
+            "name": "implement_feature",
+            "prompt": (
+                "Add a new credential type for the Notion API to n8n. Find where existing "
+                "credentials are defined (like the GitHub or Slack credentials), look at "
+                "the pattern, and write the credential class. Show me the exact file to "
+                "create and the code."
+            ),
+        },
+        {
+            "name": "fix_bug",
+            "prompt": (
+                "Users are reporting that the HTTP Request node silently drops headers "
+                "when following redirects. Find the HTTP Request node implementation, "
+                "trace how redirects are handled, and identify where headers might be lost. "
+                "Show me the relevant code paths."
+            ),
+        },
+        {
+            "name": "refactor_impact",
+            "prompt": (
+                "I'm planning to refactor `packages/cli/src/services/orchestration.service.ts`. "
+                "Before I start, I need to know: what files depend on it? What's imported "
+                "from it elsewhere? Give me a complete list of everything that would break."
+            ),
+        },
+    ],
+}
+
+
 def main():
-    repo_dir = LAB_DIR / "fastapi"
+    # Select repo from command line or default to fastapi
+    repo_name = sys.argv[1] if len(sys.argv) > 1 else "fastapi"
+    repo_dir = LAB_DIR / repo_name
+
     if not repo_dir.exists():
-        print("ERROR: lab/fastapi not found. Run: git clone https://github.com/tiangolo/fastapi.git lab/fastapi")
+        print(f"ERROR: lab/{repo_name} not found.")
         sys.exit(1)
+
+    if repo_name not in REPO_TASKS:
+        print(f"ERROR: no tasks defined for '{repo_name}'. Available: {list(REPO_TASKS.keys())}")
+        sys.exit(1)
+
+    tasks = REPO_TASKS[repo_name]
 
     commit = subprocess.run(
         ["git", "-C", str(repo_dir), "rev-parse", "--short=12", "HEAD"],
         capture_output=True, text=True,
     ).stdout.strip()
-    print(f"FastAPI at commit {commit}")
+    print(f"{repo_name} at commit {commit}")
 
     # Index with codebones
     print("Indexing with codebones...")
-    subprocess.run([str(CODEBONES), "index", str(repo_dir)], capture_output=True, timeout=120)
+    subprocess.run([str(CODEBONES), "index", str(repo_dir)], capture_output=True, timeout=600)
 
     OUTPUT_DIR.mkdir(exist_ok=True)
     rows = []
 
-    for task in TASKS:
+    for task in tasks:
         print(f"\n{'='*60}")
         print(f"Task: {task['name']}")
         print(f"Prompt: {task['prompt'][:80]}...")
@@ -455,7 +525,7 @@ def main():
                 tools = make_standard_tools(str(repo_dir))
                 executor = execute_standard_tool
                 system = (
-                    "You are working on the FastAPI repository (Python, ~107K LOC). "
+                    f"You are working on the {repo_name} repository. "
                     "You have access to grep, cat, find, and ls to explore the codebase. "
                     "Explore efficiently — use grep to find what you need, then read "
                     "specific files. Complete the task thoroughly."
@@ -468,13 +538,13 @@ def main():
                     return execute_standard_tool(name, args, repo_dir)
                 executor = combined_executor
                 system = (
-                    "You are working on the FastAPI repository (Python, ~107K LOC). "
+                    f"You are working on the {repo_name} repository. "
                     "You have access to standard tools (grep, cat, find, ls) AND codebones "
                     "structural tools. Use the best tool for each step:\n"
-                    "- codebones_search: find functions/classes by name — returns symbol IDs. Use codebones_get to read source.\n"
-                    "- codebones_get: read a specific symbol or file when you know the exact ID/path\n"
-                    "- codebones_graph: pass a file path to see its blast radius — all files that depend on it. Use before refactoring.\n"
-                    "- codebones_outline: see a file's structure (signatures only) without reading the full source\n"
+                    "- codebones_search: find functions/classes by name — returns symbol IDs\n"
+                    "- codebones_outline: understand what a file does — shows all signatures and structure. Use this FIRST to understand code before reading it fully.\n"
+                    "- codebones_get: read the exact source of ONE specific function. Only use when you need the implementation detail, not to understand flow.\n"
+                    "- codebones_graph: blast radius — pass a file path to see all files that depend on it. Use before refactoring.\n"
                     "- grep: find text patterns (imports, strings, config values)\n"
                     "- cat: read small files or config files\n"
                     "Complete the task thoroughly."
