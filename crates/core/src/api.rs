@@ -407,7 +407,7 @@ fn db_path(dir: &Path) -> Result<std::path::PathBuf> {
 /// Path lookup is performed against the SQLite cache only — no filesystem reads occur.
 /// `.codebones/codebones.db` is a trust boundary: callers must ensure the database file has
 /// appropriate filesystem permissions and has not been tampered with.
-pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
+pub fn get(dir: &Path, symbol_or_path: &str, filter: Option<&str>) -> Result<String> {
     ensure_fresh(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
@@ -417,18 +417,71 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
     cache.init()?;
 
     // It's a symbol if it contains ::
-    if symbol_or_path.contains("::") {
+    let source = if symbol_or_path.contains("::") {
         if let Some(content) = cache.get_symbol_content(symbol_or_path)? {
-            return Ok(String::from_utf8_lossy(&content).to_string());
+            String::from_utf8_lossy(&content).to_string()
+        } else {
+            anyhow::bail!("Symbol or path not found: {}", symbol_or_path)
         }
     } else {
         // Assume file path
         if let Some(content) = cache.get_file_content(symbol_or_path)? {
-            return Ok(String::from_utf8_lossy(&content).to_string());
+            String::from_utf8_lossy(&content).to_string()
+        } else {
+            anyhow::bail!("Symbol or path not found: {}", symbol_or_path)
+        }
+    };
+
+    match filter {
+        None => Ok(source),
+        Some(pattern) => Ok(apply_filter(&source, pattern)),
+    }
+}
+
+fn apply_filter(source: &str, pattern: &str) -> String {
+    let lines: Vec<&str> = source.lines().collect();
+
+    // Small function: return in full
+    if lines.len() <= 10 {
+        return source.to_string();
+    }
+
+    // Find matching line indices
+    let pattern_lower = pattern.to_lowercase();
+    let mut include = vec![false; lines.len()];
+
+    // Always include first line (signature)
+    include[0] = true;
+
+    for (i, line) in lines.iter().enumerate() {
+        if line.to_lowercase().contains(&pattern_lower) {
+            // Include match + 1 line before + 1 line after
+            if i > 0 {
+                include[i - 1] = true;
+            }
+            include[i] = true;
+            if i + 1 < lines.len() {
+                include[i + 1] = true;
+            }
         }
     }
 
-    anyhow::bail!("Symbol or path not found: {}", symbol_or_path)
+    // Build result with ... for gaps
+    let mut result = Vec::new();
+    let mut in_gap = false;
+    for (i, line) in lines.iter().enumerate() {
+        if include[i] {
+            if in_gap {
+                result.push("    ...".to_string());
+                in_gap = false;
+            }
+            result.push(line.to_string());
+        } else {
+            in_gap = true;
+        }
+    }
+
+    result.join("\n")
 }
 
 /// Returns a skeleton view of a source file by eliding function and class bodies with `...`.

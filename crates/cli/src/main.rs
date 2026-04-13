@@ -31,6 +31,9 @@ pub enum Commands {
         dir: PathBuf,
         /// The symbol name (e.g., `src/main.rs::Database.connect`) or file path
         symbol_or_path: String,
+        /// Return only lines matching this pattern (case-insensitive), with 1 line of context
+        #[arg(long)]
+        filter: Option<String>,
     },
     /// Searches for symbols by name substring. Use an empty string ("") to list all indexed symbols.
     /// Note: % and _ are treated as literals, not wildcards.
@@ -325,8 +328,9 @@ fn main() -> anyhow::Result<()> {
         Commands::Get {
             dir,
             symbol_or_path,
+            filter,
         } => {
-            let result = codebones_core::api::get(&dir, &symbol_or_path)?;
+            let result = codebones_core::api::get(&dir, &symbol_or_path, filter.as_deref())?;
             println!("{}", result);
         }
         Commands::Search { dir, query } => {

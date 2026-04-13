@@ -258,7 +258,7 @@ fn index_preserves_cached_content_for_previously_indexed_unreadable_file_on_rein
         "previously indexed unreadable files should keep their cached symbols"
     );
 
-    let content = api::get(dir.path(), "restricted.rs").expect("cached file content");
+    let content = api::get(dir.path(), "restricted.rs", None).expect("cached file content");
     assert!(
         content.contains("pub fn secret()"),
         "cached file content should be preserved for unreadable files"
@@ -284,7 +284,7 @@ fn get_returns_source_for_known_symbol() -> Result<(), Box<dyn std::error::Error
 
     let symbol_id = &results[0];
     let source =
-        api::get(dir.path(), symbol_id).expect("get should return source for known symbol");
+        api::get(dir.path(), symbol_id, None).expect("get should return source for known symbol");
     assert!(
         source.contains("add"),
         "returned source should contain the symbol name 'add'; got: {source}"
@@ -299,7 +299,7 @@ fn get_returns_file_content_for_path() -> Result<(), Box<dyn std::error::Error>>
     api::index(dir.path()).expect("index");
 
     // The file is stored in the DB by relative path.
-    let content = api::get(dir.path(), "lib.rs").expect("get should return file content for path");
+    let content = api::get(dir.path(), "lib.rs", None).expect("get should return file content for path");
     assert!(
         content.contains("pub fn add"),
         "returned file content should contain expected function; got: {content}"
@@ -313,7 +313,7 @@ fn get_returns_error_for_nonexistent_symbol() -> Result<(), Box<dyn std::error::
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
     api::index(dir.path()).expect("index");
 
-    let result = api::get(dir.path(), "lib.rs::nonexistent_symbol_xyz");
+    let result = api::get(dir.path(), "lib.rs::nonexistent_symbol_xyz", None);
     assert!(
         result.is_err(),
         "get with missing symbol should return an error"
@@ -325,7 +325,7 @@ fn get_returns_error_for_nonexistent_symbol() -> Result<(), Box<dyn std::error::
 fn get_returns_error_when_no_index_exists() {
     let dir = TempDir::new().expect("failed to create tempdir");
     // No index was ever created.
-    let result = api::get(dir.path(), "lib.rs");
+    let result = api::get(dir.path(), "lib.rs", None);
     assert!(
         result.is_err(),
         "get without a prior index should return an error"
@@ -339,7 +339,7 @@ fn get_handles_unicode_in_symbol_name() -> Result<(), Box<dyn std::error::Error>
     api::index(dir.path()).expect("index");
 
     // A symbol with a Unicode name will simply not be found — verify it errors cleanly.
-    let result = api::get(dir.path(), "lib.rs::函数_unicode");
+    let result = api::get(dir.path(), "lib.rs::函数_unicode", None);
     assert!(
         result.is_err(),
         "get for unicode symbol that doesn't exist should return an error, not panic"
@@ -1267,7 +1267,7 @@ fn get_returns_full_source_for_file_with_unicode_content() -> Result<(), Box<dyn
     api::index(dir.path()).expect("index");
 
     let content =
-        api::get(dir.path(), "unicode.rs").expect("get file with unicode content should succeed");
+        api::get(dir.path(), "unicode.rs", None).expect("get file with unicode content should succeed");
 
     assert!(
         content.contains("日本語コメント"),
@@ -2542,7 +2542,7 @@ fn get_auto_reindexes_newly_added_symbol() -> Result<(), Box<dyn std::error::Err
     fs::write(dir.path().join("extra.rs"), "pub fn fresh_symbol() {}\n")?;
 
     // get must auto-reindex so the symbol is present.
-    let content = api::get(dir.path(), "extra.rs::fresh_symbol")?;
+    let content = api::get(dir.path(), "extra.rs::fresh_symbol", None)?;
     assert!(
         content.contains("fresh_symbol"),
         "get should auto-reindex and return content for 'fresh_symbol'; got: {content}"
@@ -2677,7 +2677,7 @@ fn get_picks_up_changes_after_initial_index() -> Result<(), Box<dyn std::error::
         "pub fn original() {}\npub fn added_later() {}\n",
     )?;
 
-    let content = api::get(dir.path(), "lib.rs::added_later")?;
+    let content = api::get(dir.path(), "lib.rs::added_later", None)?;
     assert!(
         content.contains("added_later"),
         "get should detect the changed file and return 'added_later' without manual re-index; got: {content}"
