@@ -1755,6 +1755,75 @@ fn graph_file_returns_empty_for_file_with_no_importers() -> Result<(), Box<dyn s
 }
 
 // ---------------------------------------------------------------------------
+// AC (import details): api::graph_file() returns AffectedFile with imports
+// ---------------------------------------------------------------------------
+
+/// AC1: BlastRadiusResult.affected_files must be Vec<AffectedFile>, not Vec<String>.
+/// Each AffectedFile must carry the list of raw import strings that reference the
+/// target file.  This test fails until AffectedFile is introduced and graph_file()
+/// populates the imports field.
+#[test]
+fn graph_file_affected_files_include_import_details(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    let result =
+        api::graph_file(dir.path(), "src/db.ts", 3).expect("graph_file should succeed");
+
+    assert!(
+        !result.affected_files.is_empty(),
+        "expected affected files for src/db.ts; got none"
+    );
+
+    // Every affected file must have at least one import string recorded.
+    for af in &result.affected_files {
+        assert!(
+            !af.imports.is_empty(),
+            "affected file '{}' must have at least one import string; got none",
+            af.path
+        );
+    }
+
+    Ok(())
+}
+
+/// AC2: The imports field must contain the raw import string that references db.ts.
+/// utils.ts has `import { db } from './db'` — the raw_import captured by the
+/// indexer must be present in its AffectedFile.imports list.
+#[test]
+fn graph_file_import_strings_match_source_import(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    let result =
+        api::graph_file(dir.path(), "src/db.ts", 3).expect("graph_file should succeed");
+
+    let utils_entry = result
+        .affected_files
+        .iter()
+        .find(|af| af.path.contains("utils.ts"))
+        .expect("utils.ts must be in the blast radius of db.ts");
+
+    // The raw import captured at index time should reference "db" in some form.
+    let has_db_ref = utils_entry
+        .imports
+        .iter()
+        .any(|raw| raw.contains("db"));
+
+    assert!(
+        has_db_ref,
+        "utils.ts AffectedFile.imports must contain a string referencing 'db'; got: {:?}",
+        utils_entry.imports
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // init command — AC 1-7, 9
 // ---------------------------------------------------------------------------
 

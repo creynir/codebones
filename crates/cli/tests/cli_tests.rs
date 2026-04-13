@@ -1050,6 +1050,69 @@ fn test_graph_file_outputs_blast_radius() {
         );
 }
 
+/// AC6b: `codebones graph <file>` markdown output shows what each affected file
+/// imports from the target.  Each affected file entry must be followed by an
+/// "imports:" line listing the relevant symbols/modules.
+/// This test fails until the CLI renders import details.
+#[test]
+fn test_graph_file_blast_radius_shows_import_details() {
+    let temp = setup_graph_repo();
+    let root = temp.path();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "src/db.ts"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+
+    // The output must contain an "imports:" line for each affected file.
+    assert!(
+        stdout.contains("imports:"),
+        "blast radius markdown must include 'imports:' lines; got:\n{}",
+        stdout
+    );
+
+    // The import detail must reference "db" (the module being changed).
+    assert!(
+        stdout.contains("db"),
+        "imports line must reference 'db'; got:\n{}",
+        stdout
+    );
+}
+
+/// AC6c: `codebones graph <file> --format json` includes an `imports` array per
+/// affected file entry.  This test fails until the JSON serialiser emits imports.
+#[test]
+fn test_graph_file_blast_radius_json_includes_imports() {
+    let temp = setup_graph_repo();
+    let root = temp.path();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph", "src/db.ts", "--format", "json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let stdout = String::from_utf8_lossy(&output);
+
+    // JSON must contain an "imports" key for each affected file.
+    assert!(
+        stdout.contains("\"imports\""),
+        "JSON blast radius output must include an 'imports' key per affected file; got:\n{}",
+        stdout
+    );
+}
+
 /// AC7: `codebones graph --format json` outputs JSON format.
 #[test]
 fn test_graph_format_json() {
