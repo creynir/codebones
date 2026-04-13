@@ -37,7 +37,7 @@ Two Claude Sonnet agents solve the same task on [FastAPI](https://github.com/tia
 | Refactor impact analysis | 163K tokens, 41 calls, 20 turns | 31K tokens, 14 calls, 6 turns | **5.2x fewer** | **70% fewer** |
 | Trace dependency bug | 110K tokens, 28 calls, 20 turns | 196K tokens, 28 calls, 19 turns | 0.6x (worse) | even |
 
-`codebones graph` is the standout — one call returns the blast radius for a file, replacing 41 grep/ls calls across 20 turns. For implementation tasks, `search` + `get --filter` replace directory browsing. Deep code tracing (reading full function bodies to understand logic) still favors grep's line-level output. Full conversation logs in [docs/benchmarks/](docs/benchmarks/agent-eval-results/).
+`codebones graph` replaced 41 grep/ls calls across 20 turns with one call. For implementation tasks, `search` + `get --filter` replace directory browsing. Deep code tracing still favors grep — reading full function bodies to understand logic is cheaper with line-level fragments. Full conversation logs in [docs/benchmarks/](docs/benchmarks/agent-eval-results/).
 
 ## Install
 
@@ -89,7 +89,7 @@ codebones init
 | **AST-aware parsing** | Function signatures, class hierarchies, and impl blocks extracted via tree-sitter across 12 languages |
 | **Import graph** | Dependency tracking across all 12 languages — see which files import what, find hot files, and compute blast radius for any change |
 | **Token-budget packing** | Full files until the budget fills, then automatic degradation to structural skeletons — no manual trimming |
-| **Skeleton map** | Hierarchical repo map at the top of every payload so the LLM orients instantly |
+| **Skeleton map** | Hierarchical repo map at the top of every payload so the LLM knows what's where |
 | **O(1) symbol retrieval** | SQLite cache with byte-offset indexing — `substr()` reads, no re-parsing |
 | **Secret filtering** | `.env`, private keys, credentials, and PEM files automatically excluded from output |
 | **Incremental indexing** | SHA-256 file hashing — only re-parses changed files on subsequent runs |
