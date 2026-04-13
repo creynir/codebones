@@ -2646,3 +2646,288 @@ fn search_works_with_no_prior_index() -> Result<(), Box<dyn std::error::Error>> 
     );
     Ok(())
 }
+
+// ===========================================================================
+// Git-based fast path: ensure_fresh() — AC1-6
+//
+// These tests FAIL today because ensure_fresh() does not exist yet. They will
+// pass once ensure_fresh() is implemented and wired into the read commands.
+//
+// AC7 (read commands use ensure_fresh instead of raw index) is already covered
+// by the auto-reindex tests above — not duplicated here.
+// ===========================================================================
+
+use std::process::Command as StdCommand;
+
+/// Sets up a minimal git repo in `dir` with all current files committed.
+fn init_git_repo(dir: &std::path::Path) {
+    StdCommand::new("git")
+        .args(["init"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    StdCommand::new("git")
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    StdCommand::new("git")
+        .args(["config", "user.name", "test"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    StdCommand::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    StdCommand::new("git")
+        .args(["-c", "commit.gpgsign=false", "commit", "-m", "init"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+}
+
+/// Returns the current HEAD commit hash for `dir` (trimmed).
+fn git_head(dir: &std::path::Path) -> String {
+    let out = StdCommand::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .expect("git rev-parse HEAD must succeed");
+    String::from_utf8(out.stdout)
+        .expect("HEAD hash must be valid UTF-8")
+        .trim()
+        .to_string()
+}
+
+/// AC6: After `index()` completes on a git repo, `.codebones/last_commit`
+/// exists and its contents equal the current HEAD commit hash.
+#[test]
+fn index_writes_last_commit_file_in_git_repo() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+    init_git_repo(dir.path());
+
+    api::index(dir.path())?;
+
+    let last_commit_path = dir.path().join(".codebones").join("last_commit");
+    assert!(
+        last_commit_path.exists(),
+        ".codebones/last_commit must exist after index() on a git repo"
+    );
+
+    let stored = fs::read_to_string(&last_commit_path)?
+        .trim()
+        .to_string();
+    let head = git_head(dir.path());
+
+    assert_eq!(
+        stored, head,
+        ".codebones/last_commit must contain the current HEAD hash; stored={stored}, HEAD={head}"
+    );
+    Ok(())
+}
+
+/// AC6 (no git): When there is no `.git/` directory, `index()` must NOT
+/// create `.codebones/last_commit` (nothing to record).
+#[test]
+fn index_does_not_write_last_commit_file_without_git() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+    // No git init — plain directory.
+
+    api::index(dir.path())?;
+
+    let last_commit_path = dir.path().join(".codebones").join("last_commit");
+    assert!(
+        !last_commit_path.exists(),
+        ".codebones/last_commit must NOT be created when there is no .git/ directory"
+    );
+    Ok(())
+}
+
+/// AC1: When the git repo is clean and HEAD has not changed since the last
+/// index, `ensure_fresh()` skips re-indexing. Verified by checking that
+/// `.codebones/last_commit` exists and still matches HEAD after calling a
+/// read command (search) without any file changes.
+#[test]
+fn ensure_fresh_skips_indexing_when_git_is_clean_and_head_unchanged(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+    init_git_repo(dir.path());
+
+    // First full index — populates DB and writes last_commit.
+    api::index(dir.path())?;
+
+    let head_before = git_head(dir.path());
+    let last_commit_before = fs::read_to_string(
+        dir.path().join(".codebones").join("last_commit"),
+    )?
+    .trim()
+    .to_string();
+    assert_eq!(
+        last_commit_before, head_before,
+        "pre-condition: last_commit must equal HEAD before the skip test"
+    );
+
+    // Call a read command — no files changed, repo is clean, HEAD unchanged.
+    // ensure_fresh must detect the fast-path condition and skip indexing.
+    let results = api::search(dir.path(), "add")?;
+    assert!(
+        !results.is_empty(),
+        "search must still return results when indexing is skipped; got: {:?}",
+        results
+    );
+
+    // The last_commit file must still match HEAD (no rewrite from a spurious re-index).
+    let last_commit_after = fs::read_to_string(
+        dir.path().join(".codebones").join("last_commit"),
+    )?
+    .trim()
+    .to_string();
+    assert_eq!(
+        last_commit_after, head_before,
+        "last_commit must remain equal to HEAD after a clean-repo skip; \
+         stored={last_commit_after}, HEAD={head_before}"
+    );
+    Ok(())
+}
+
+/// AC2: When a file has been modified after the last index (dirty working
+/// tree), `ensure_fresh()` must run a full re-index so that `search()` finds
+/// the new content.
+#[test]
+fn ensure_fresh_reindexes_when_working_tree_is_dirty() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+    init_git_repo(dir.path());
+
+    // Initial index — sets up DB and last_commit.
+    api::index(dir.path())?;
+
+    // Modify a tracked file without committing — dirty working tree.
+    let modified = format!("{}\npub fn dirty_fn() {{}}", RUST_FIXTURE);
+    fs::write(dir.path().join("lib.rs"), &modified)?;
+
+    // search must re-index and find the new symbol.
+    let results = api::search(dir.path(), "dirty_fn")?;
+    assert!(
+        !results.is_empty(),
+        "search must re-index when working tree is dirty and find 'dirty_fn'; got: {:?}",
+        results
+    );
+    Ok(())
+}
+
+/// AC3: When HEAD advances (a new commit is made) after the last index,
+/// `ensure_fresh()` must re-index so the next read command sees the new
+/// content.
+#[test]
+fn ensure_fresh_reindexes_when_head_changes() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+    init_git_repo(dir.path());
+
+    // Initial index.
+    api::index(dir.path())?;
+
+    let head_before = git_head(dir.path());
+
+    // Add a new file and make a second commit — HEAD advances.
+    fs::write(
+        dir.path().join("new_commit.rs"),
+        "pub fn committed_later() {}\n",
+    )?;
+    StdCommand::new("git")
+        .args(["add", "new_commit.rs"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    StdCommand::new("git")
+        .args(["-c", "commit.gpgsign=false", "commit", "-m", "second commit"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+
+    let head_after = git_head(dir.path());
+    assert_ne!(
+        head_before, head_after,
+        "pre-condition: HEAD must have advanced after the second commit"
+    );
+
+    // search must re-index because HEAD changed and find the new symbol.
+    let results = api::search(dir.path(), "committed_later")?;
+    assert!(
+        !results.is_empty(),
+        "search must re-index when HEAD changes and find 'committed_later'; got: {:?}",
+        results
+    );
+
+    // last_commit must have been updated to the new HEAD.
+    let stored = fs::read_to_string(dir.path().join(".codebones").join("last_commit"))?
+        .trim()
+        .to_string();
+    assert_eq!(
+        stored, head_after,
+        "last_commit must be updated to the new HEAD after re-indexing; \
+         stored={stored}, new_HEAD={head_after}"
+    );
+    Ok(())
+}
+
+/// AC4: When `.git/` does NOT exist (plain directory, not a git repo),
+/// `ensure_fresh()` must always run a full index so that read commands
+/// reflect the current state of the filesystem.
+#[test]
+fn ensure_fresh_always_reindexes_in_non_git_directory() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    // No git init — plain directory.
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+
+    // Initial index.
+    api::index(dir.path())?;
+
+    // Add a new file — no git, no commit.
+    fs::write(dir.path().join("plain.rs"), "pub fn plain_fn() {}\n")?;
+
+    // search must re-index (no fast-path possible without git) and find the new file.
+    let results = api::search(dir.path(), "plain_fn")?;
+    assert!(
+        !results.is_empty(),
+        "search must re-index in a non-git directory and find 'plain_fn'; got: {:?}",
+        results
+    );
+    Ok(())
+}
+
+/// AC5: When `.codebones/codebones.db` does not exist (first run),
+/// `ensure_fresh()` must run a full index regardless of git state.
+#[test]
+fn ensure_fresh_runs_full_index_when_db_missing() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
+    init_git_repo(dir.path());
+
+    // Explicitly confirm no DB exists yet.
+    assert!(
+        !dir.path().join(".codebones").join("codebones.db").exists(),
+        "pre-condition: codebones.db must not exist before first search"
+    );
+
+    // Calling search with no prior index must trigger a full index from scratch.
+    let results = api::search(dir.path(), "add")?;
+    assert!(
+        !results.is_empty(),
+        "search must run a full index when db is missing and find 'add'; got: {:?}",
+        results
+    );
+
+    // DB must now exist.
+    assert!(
+        dir.path().join(".codebones").join("codebones.db").exists(),
+        ".codebones/codebones.db must be created after the first-run index"
+    );
+    Ok(())
+}
