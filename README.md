@@ -17,7 +17,7 @@ A `codebones map` of the n8n codebase (2M LOC) is **22x smaller** than the raw s
 
 ## Token savings
 
-### Static: codebones map vs raw source
+### Theoretical maximum: codebones map vs raw source
 
 | Project | Raw source | codebones map | Reduction |
 |---|---:|---:|---:|
@@ -27,14 +27,17 @@ A `codebones map` of the n8n codebase (2M LOC) is **22x smaller** than the raw s
 
 ### Real-world: agent eval on FastAPI
 
-Two Claude Sonnet agents solve the same task on [FastAPI](https://github.com/tiangolo/fastapi) (107K LOC). One has only standard tools (grep, cat, find, ls). The other has standard tools plus codebones. No turn limit — agents work until done.
+The static numbers above are the theoretical maximum — skeleton vs full source. In practice, agents don't read all source files; they use grep and cat selectively. Real-world savings are lower and vary by task.
 
-| Task | Standard only | Standard + codebones | Tokens saved | Turns saved |
+Two Claude Sonnet agents solve the same task on [FastAPI](https://github.com/tiangolo/fastapi) (107K LOC). One has only standard tools (grep, cat, find, ls). The other has standard tools **plus** codebones. No turn limit — agents work until done.
+
+| Task | Standard only | Standard + codebones | Tokens | Turns |
 |------|---:|---:|---:|---:|
-| Add CORS middleware | 65K tokens, 27 calls, 15 turns | 55K tokens, 23 calls, 9 turns | **1.2x** | **40%** |
-| Trace dependency bug | 144K tokens, 34 calls, 20 turns | 114K tokens, 16 calls, 10 turns | **1.3x** | **53%** |
+| Add CORS middleware | 53K tokens, 30 calls, 12 turns | 22K tokens, 17 calls, 5 turns | **2.4x fewer** | **58% fewer** |
+| Trace dependency bug | 122K tokens, 33 calls, 20 turns | 211K tokens, 33 calls, 20 turns | 0.6x (worse) | even |
+| Refactor impact analysis | 156K tokens, 44 calls, 20 turns | 164K tokens, 41 calls, 17 turns | ~even | 15% fewer |
 
-The codebones agent finishes in half the turns. `codebones search` jumps directly to symbols instead of browsing directories, and `codebones get` reads one function instead of the whole file. Full conversation logs in [docs/benchmarks/agent-eval-results/](docs/benchmarks/agent-eval-results/).
+codebones wins on implementation tasks where `search` + `get` replace directory browsing. It loses on deep code tracing where `get` returns full function bodies that accumulate in conversation history — grep's line-level fragments are leaner there. Full conversation logs in [docs/benchmarks/](docs/benchmarks/agent-eval-results/).
 
 ## Install
 

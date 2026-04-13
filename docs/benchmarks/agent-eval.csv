@@ -1,7 +1,7 @@
 task,approach,median_input_tokens,median_output_tokens,median_total_tokens,median_tool_calls,median_turns
-implement_middleware,standard,96608,3455,100063,31,19
-implement_middleware,codebones,39027,2437,41464,16,7
-fix_bug,standard,81117,2247,83364,25,20
-fix_bug,codebones,226617,2602,229219,35,20
-refactor_impact,standard,165431,3135,168566,40,20
-refactor_impact,codebones,131130,5070,136200,38,17
+implement_middleware,standard,50072,3107,53179,30,12
+implement_middleware,codebones,19791,2043,21834,17,5
+fix_bug,standard,118821,2848,121669,33,20
+fix_bug,codebones,208803,2620,211423,33,20
+refactor_impact,standard,152773,3359,156132,44,20
+refactor_impact,codebones,158435,5456,163891,41,17
