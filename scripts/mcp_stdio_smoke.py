@@ -81,7 +81,7 @@ def main() -> int:
         tools_response = read_response(proc, 2)
         tools = tools_response.get("result", {}).get("tools", [])
         tool_names = {tool["name"] for tool in tools}
-        expected = {"index", "outline", "get", "search"}
+        expected = {"index", "outline", "get", "search", "map", "graph", "graph_file"}
         if tool_names != expected:
             raise RuntimeError(
                 f"unexpected MCP tools: got {sorted(tool_names)}, expected {sorted(expected)}"
