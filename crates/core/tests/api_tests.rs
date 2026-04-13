@@ -2202,3 +2202,239 @@ fn python_graph_shows_nonzero_import_counts() -> Result<(), Box<dyn std::error::
 
     Ok(())
 }
+
+// ===========================================================================
+// Skeleton-budget degradation by import count — failing tests (RED)
+//
+// Acceptance criteria:
+//   AC1: pack --max-tokens N produces output whose token count does not exceed N
+//        (within 10% tolerance)
+//   AC2: when the skeleton is truncated, high-import-count files survive and
+//        low-import-count files are dropped
+//   AC3: when the budget is large enough for skeleton + all bodies, no truncation
+//   AC5: pack --no-files (skeleton-only / map mode) also respects the budget
+// ===========================================================================
+
+/// Write a multi-file TypeScript project with a known import graph.
+///
+/// Import topology:
+///   a.ts  imports hot.ts and warm.ts
+///   b.ts  imports hot.ts
+///   c.ts  imports hot.ts
+///   hot.ts  — no imports (import_count = 3: imported by a, b, c)
+///   warm.ts — no imports (import_count = 1: imported by a)
+///   cold1.ts — no imports (import_count = 0)
+///   cold2.ts — no imports (import_count = 0)
+///
+/// Each file is padded with enough exported functions that the combined skeleton
+/// map exceeds 200 tokens, so a max_tokens=200 budget forces truncation.
+fn write_import_budget_fixture(dir: &TempDir) {
+    // hot.ts — heavily imported utility; padded so its skeleton chunk is non-trivial
+    fs::write(
+        dir.path().join("hot.ts"),
+        r#"export function hotAlpha(x: number): number { return x * 2; }
+export function hotBeta(x: number): number { return x * 3; }
+export function hotGamma(x: number): number { return x * 4; }
+export function hotDelta(x: number): number { return x * 5; }
+export function hotEpsilon(x: number): number { return x * 6; }
+"#,
+    )
+    .expect("write hot.ts");
+
+    // warm.ts — moderately imported; padded similarly
+    fs::write(
+        dir.path().join("warm.ts"),
+        r#"export function warmAlpha(x: number): number { return x + 10; }
+export function warmBeta(x: number): number { return x + 20; }
+export function warmGamma(x: number): number { return x + 30; }
+export function warmDelta(x: number): number { return x + 40; }
+export function warmEpsilon(x: number): number { return x + 50; }
+"#,
+    )
+    .expect("write warm.ts");
+
+    // cold1.ts — never imported; padded with content
+    fs::write(
+        dir.path().join("cold1.ts"),
+        r#"export function coldOneAlpha(x: number): number { return x - 1; }
+export function coldOneBeta(x: number): number { return x - 2; }
+export function coldOneGamma(x: number): number { return x - 3; }
+export function coldOneDelta(x: number): number { return x - 4; }
+export function coldOneEpsilon(x: number): number { return x - 5; }
+"#,
+    )
+    .expect("write cold1.ts");
+
+    // cold2.ts — never imported; padded with content
+    fs::write(
+        dir.path().join("cold2.ts"),
+        r#"export function coldTwoAlpha(x: number): number { return x / 2; }
+export function coldTwoBeta(x: number): number { return x / 3; }
+export function coldTwoGamma(x: number): number { return x / 4; }
+export function coldTwoDelta(x: number): number { return x / 5; }
+export function coldTwoEpsilon(x: number): number { return x / 6; }
+"#,
+    )
+    .expect("write cold2.ts");
+
+    // a.ts — imports both hot and warm (contributes 1 each to their import_count)
+    fs::write(
+        dir.path().join("a.ts"),
+        r#"import { hotAlpha } from './hot';
+import { warmAlpha } from './warm';
+export function useHotAndWarm(x: number): number { return hotAlpha(x) + warmAlpha(x); }
+"#,
+    )
+    .expect("write a.ts");
+
+    // b.ts — imports only hot (contributes 1 to hot's import_count)
+    fs::write(
+        dir.path().join("b.ts"),
+        r#"import { hotBeta } from './hot';
+export function useHot(x: number): number { return hotBeta(x); }
+"#,
+    )
+    .expect("write b.ts");
+
+    // c.ts — imports only hot (contributes 1 to hot's import_count)
+    fs::write(
+        dir.path().join("c.ts"),
+        r#"import { hotGamma } from './hot';
+export function alsoUseHot(x: number): number { return hotGamma(x); }
+"#,
+    )
+    .expect("write c.ts");
+}
+
+// ---------------------------------------------------------------------------
+// AC1: output token count does not exceed max_tokens (within 10% tolerance)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pack_with_tight_budget_produces_output_within_token_limit(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_import_budget_fixture(&dir);
+
+    let max_tokens: usize = 200;
+    let output = api::pack(dir.path(), "xml", Some(max_tokens), default_pack_options())
+        .expect("pack with max_tokens should not error");
+
+    let bpe = tiktoken_rs::cl100k_base().expect("initialize tokenizer");
+    let actual_tokens = bpe.encode_with_special_tokens(&output).len();
+
+    // Allow 10% over-budget tolerance (the ticket spec allows "within 10% of N")
+    let tolerance = max_tokens + max_tokens / 10;
+    assert!(
+        actual_tokens <= tolerance,
+        "pack output must not exceed {tolerance} tokens (max_tokens={max_tokens} + 10%); \
+         got {actual_tokens} tokens.\nOutput:\n{output}"
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AC2: when skeleton is truncated, high-import files survive; low-import dropped
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pack_skeleton_truncation_keeps_high_import_files_and_drops_cold_files(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_import_budget_fixture(&dir);
+
+    // With a tight budget the skeleton must be truncated. hot.ts (import_count=3)
+    // and warm.ts (import_count=1) must survive; cold1.ts and cold2.ts
+    // (import_count=0) must be absent.
+    let max_tokens: usize = 200;
+    let output = api::pack(dir.path(), "xml", Some(max_tokens), default_pack_options())
+        .expect("pack with max_tokens should not error");
+
+    assert!(
+        output.contains("hot.ts"),
+        "hot.ts (import_count=3) must appear in the truncated output; got:\n{output}"
+    );
+    assert!(
+        output.contains("warm.ts"),
+        "warm.ts (import_count=1) must appear in the truncated output; got:\n{output}"
+    );
+    assert!(
+        !output.contains("cold1.ts"),
+        "cold1.ts (import_count=0) must be dropped when skeleton is truncated; got:\n{output}"
+    );
+    assert!(
+        !output.contains("cold2.ts"),
+        "cold2.ts (import_count=0) must be dropped when skeleton is truncated; got:\n{output}"
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AC3: with a generous budget, all files appear — no truncation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pack_with_generous_budget_includes_all_files() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_import_budget_fixture(&dir);
+
+    // A very large budget: nothing should be dropped.
+    let output = api::pack(dir.path(), "xml", Some(100_000), default_pack_options())
+        .expect("pack with large max_tokens should not error");
+
+    for name in &["hot.ts", "warm.ts", "cold1.ts", "cold2.ts"] {
+        assert!(
+            output.contains(name),
+            "with a generous budget, {name} must be present in the output; got:\n{output}"
+        );
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AC5: pack --no-files (map mode) also respects the token budget
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pack_no_files_skeleton_map_respects_token_budget() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_import_budget_fixture(&dir);
+
+    let max_tokens: usize = 200;
+    let options = PackOptions {
+        no_files: true,
+        ..default_pack_options()
+    };
+    let output = api::pack(dir.path(), "xml", Some(max_tokens), options)
+        .expect("pack --no-files with max_tokens should not error");
+
+    // The skeleton map itself must respect the budget.
+    let bpe = tiktoken_rs::cl100k_base().expect("initialize tokenizer");
+    let actual_tokens = bpe.encode_with_special_tokens(&output).len();
+    let tolerance = max_tokens + max_tokens / 10;
+
+    assert!(
+        actual_tokens <= tolerance,
+        "pack --no-files output must not exceed {tolerance} tokens; got {actual_tokens}.\n\
+         Output:\n{output}"
+    );
+
+    // hot.ts (highest import count) must be present; cold files must be absent.
+    assert!(
+        output.contains("hot.ts"),
+        "hot.ts must survive skeleton budget truncation in --no-files mode; got:\n{output}"
+    );
+    assert!(
+        !output.contains("cold1.ts"),
+        "cold1.ts must be dropped from skeleton map when budget is tight; got:\n{output}"
+    );
+    assert!(
+        !output.contains("cold2.ts"),
+        "cold2.ts must be dropped from skeleton map when budget is tight; got:\n{output}"
+    );
+
+    Ok(())
+}
