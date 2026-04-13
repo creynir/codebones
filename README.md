@@ -162,21 +162,31 @@ All numbers are cold-start medians in milliseconds. Full methodology and raw dat
 | temporal (833K LOC, Go) | **10.45** | 432.79 | 8,208.27 | TIMEOUT | 199.83 |
 | n8n (2.07M LOC, TypeScript) | **11.82** | 1,998.44 | TIMEOUT | TIMEOUT | 104.54 |
 
-### Indexing
+### Indexing (symbols + imports)
 
 | Dataset | codebones | jcodemunch-mcp |
 |---|---:|---:|
-| agenthelm (6.25K LOC, Python) | **8.45** | 76.77 |
-| temporal (833K LOC, Go) | **290** | 754.05 |
-| n8n (2.07M LOC, TypeScript) | **1,310** | 8,249.67 |
+| agenthelm (6.25K LOC, Python) | **249** | 76.77 |
+| temporal (833K LOC, Go) | **18,039** | 754.05 |
+| n8n (2.07M LOC, TypeScript) | **28,570** | 8,249.67 |
+
+Index now extracts import statements across all 12 languages and builds the dependency graph. This is slower than symbol-only indexing but enables `graph` and blast radius queries.
 
 ### Context packing
 
 | Dataset | codebones | repomix |
 |---|---:|---:|
-| agenthelm (6.25K LOC, Python) | **50** | 947 |
-| temporal (833K LOC, Go) | **2,580** | 10,237 |
-| n8n (2.07M LOC, TypeScript) | **7,930** | 11,548 |
+| agenthelm (6.25K LOC, Python) | **101** | 947 |
+| temporal (833K LOC, Go) | **4,025** | 10,237 |
+| n8n (2.07M LOC, TypeScript) | **8,511** | 11,548 |
+
+### Import graph + blast radius
+
+| Dataset | graph | map |
+|---|---:|---:|
+| agenthelm (6.25K LOC, Python) | **26ms** | **32ms** |
+| temporal (833K LOC, Go) | **39ms** | **303ms** |
+| n8n (2.07M LOC, TypeScript) | **56ms** | **1,369ms** |
 
 100% correctness (hit@1, precision, recall) across all datasets. Benchmark machine: macOS 15.7.1, Apple M4, 16 GB RAM.
 
@@ -185,7 +195,7 @@ All numbers are cold-start medians in milliseconds. Full methodology and raw dat
 - **Language coverage** — 12 languages have AST support. Unsupported files are indexed as plain text (no symbol extraction or body elision).
 - **File size cap** — Files over 500 KB are skipped. Large generated files and vendored code won't appear in output.
 - **Scope tracking** — Qualified names are built from AST container nodes (class, impl, namespace). Some scope types aren't tracked: Go packages, Python module-level groupings, Rust trait bounds.
-- **Import resolution** — Python module-style imports (`from agenthelm.core import event`) are stored as-is and may not resolve to file paths. Relative file path imports (`./utils`, `../db`) resolve correctly.
+- **Import resolution** — Supports file-path imports (`./utils`, `../db`), Python dotted modules (`from app.core.event import Event`), and Python relative imports (`from .utils import helper`). External/stdlib imports (e.g., `import os`) are stored but don't resolve to local files.
 - **Inline functions** — Single-expression bodies (Python lambdas, Rust closures, JS arrow functions in class fields) may not be elided correctly.
 - **Symlinks** — Skipped by default. When enabled, symlinks pointing outside the workspace root are rejected to prevent path traversal.
 
