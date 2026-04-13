@@ -2,6 +2,7 @@ use crate::cache::{CacheStore, SqliteCache};
 use crate::parser::Bone;
 use crate::parser::Parser;
 use anyhow::Result;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -168,33 +169,83 @@ impl Packer {
         };
 
         // Generate Skeleton Map
+        // Track which files made it into the skeleton so the body loop can skip the rest.
+        let mut included_files: HashSet<PathBuf> = HashSet::new();
         if !self.no_file_summary {
             match self.format {
                 OutputFormat::Xml => {
-                    output.push_str("  <skeleton_map>\n");
+                    let bpe = if self.max_tokens.is_some() {
+                        Some(
+                            tiktoken_rs::cl100k_base()
+                                .map_err(|e| anyhow::anyhow!("Failed to initialize tokenizer: {}", e))?,
+                        )
+                    } else {
+                        None
+                    };
+                    // Running token count: track only the entry tokens accumulated so far.
+                    // Structural framing tokens (<repository>, <skeleton_map>, etc.) are
+                    // small overhead that fits within the allowed tolerance, so we don't
+                    // count them here — this lets the budget check focus on file entries.
+                    let skeleton_open = "  <skeleton_map>\n";
+                    let skeleton_close = "  </skeleton_map>\n";
+                    let mut running_tokens: usize = 0;
+                    output.push_str(skeleton_open);
                     for path in file_paths {
-                        output.push_str(&format!(
+                        let mut entry = format!(
                             "    <file path=\"{}\">\n",
                             Self::xml_escape(&path.display().to_string())
-                        ));
+                        );
                         for (kind, name) in lookup_symbols(path)? {
-                            output.push_str(&format!(
+                            entry.push_str(&format!(
                                 "      <signature>{} {}</signature>\n",
                                 Self::xml_escape(&kind),
                                 Self::xml_escape(&name)
                             ));
                         }
-                        output.push_str("    </file>\n");
+                        entry.push_str("    </file>\n");
+
+                        if let (Some(ref bpe), Some(max)) = (&bpe, self.max_tokens) {
+                            let entry_tokens = bpe.encode_with_special_tokens(&entry).len();
+                            if running_tokens + entry_tokens > max {
+                                break; // budget exhausted — drop remaining files
+                            }
+                            running_tokens += entry_tokens;
+                        }
+
+                        output.push_str(&entry);
+                        included_files.insert(path.clone());
                     }
-                    output.push_str("  </skeleton_map>\n");
+                    output.push_str(skeleton_close);
                 }
                 OutputFormat::Markdown => {
-                    output.push_str("## Skeleton Map\n\n");
+                    let bpe = if self.max_tokens.is_some() {
+                        Some(
+                            tiktoken_rs::cl100k_base()
+                                .map_err(|e| anyhow::anyhow!("Failed to initialize tokenizer: {}", e))?,
+                        )
+                    } else {
+                        None
+                    };
+                    let header = "## Skeleton Map\n\n";
+                    // Same approach: track only entry tokens, not structural framing.
+                    let mut running_tokens: usize = 0;
+                    output.push_str(header);
                     for path in file_paths {
-                        output.push_str(&format!("- {}\n", path.display()));
+                        let mut entry = format!("- {}\n", path.display());
                         for (kind, name) in lookup_symbols(path)? {
-                            output.push_str(&format!("  - {} {}\n", kind, name));
+                            entry.push_str(&format!("  - {} {}\n", kind, name));
                         }
+
+                        if let (Some(ref bpe), Some(max)) = (&bpe, self.max_tokens) {
+                            let entry_tokens = bpe.encode_with_special_tokens(&entry).len();
+                            if running_tokens + entry_tokens > max {
+                                break;
+                            }
+                            running_tokens += entry_tokens;
+                        }
+
+                        output.push_str(&entry);
+                        included_files.insert(path.clone());
                     }
                     output.push('\n');
                 }
@@ -213,6 +264,11 @@ impl Packer {
         let mut degrade_to_bones = false;
 
         for path in file_paths {
+            // If the skeleton map was truncated, skip files that didn't make the cut.
+            if !included_files.is_empty() && !included_files.contains(path) {
+                continue;
+            }
+
             let mut raw_content = match std::fs::read_to_string(path) {
                 Ok(s) => s,
                 Err(e) => {
@@ -319,7 +375,21 @@ impl Packer {
                 if let Some(max) = self.max_tokens {
                     let current_tokens = bpe.encode_with_special_tokens(&output).len();
                     let content_tokens = bpe.encode_with_special_tokens(&content).len();
-                    if current_tokens + content_tokens > max {
+                    // Also account for the file wrapper and closing repo tag that will
+                    // be added around the content, so the budget check is conservative.
+                    let wrapper = match self.format {
+                        OutputFormat::Xml => {
+                            format!(
+                                "  <file path=\"{}\">\n    <content><![CDATA[\n\n]]></content>\n  </file>\n</repository>\n",
+                                Self::xml_escape(&path.display().to_string())
+                            )
+                        }
+                        OutputFormat::Markdown => {
+                            format!("## {}\n\n```\n\n```\n\n", path.display())
+                        }
+                    };
+                    let wrapper_tokens = bpe.encode_with_special_tokens(&wrapper).len();
+                    if current_tokens + content_tokens + wrapper_tokens > max {
                         degrade_to_bones = true;
                     }
                 }
@@ -327,11 +397,17 @@ impl Packer {
 
             match self.format {
                 OutputFormat::Xml => {
+                    // When budget is exceeded, skip the file entry entirely.
+                    // The skeleton map already surfaces these files — empty wrappers add no value
+                    // and push the output over the token budget.
+                    if degrade_to_bones {
+                        continue;
+                    }
                     output.push_str(&format!(
                         "  <file path=\"{}\">\n",
                         Self::xml_escape(&path.display().to_string())
                     ));
-                    if !degrade_to_bones {
+                    {
                         let safe_content = Self::xml_escape_cdata(&content);
                         if safe_content == content {
                             output.push_str(&format!(
@@ -365,8 +441,12 @@ impl Packer {
                     output.push_str("  </file>\n");
                 }
                 OutputFormat::Markdown => {
+                    // When budget is exceeded, skip the file entry entirely.
+                    if degrade_to_bones {
+                        continue;
+                    }
                     output.push_str(&format!("## {}\n\n", path.display()));
-                    if !degrade_to_bones {
+                    {
                         // Find longest run of backticks in content and use one more as the fence
                         // delimiter (CommonMark spec approach) to prevent fence injection.
                         let max_backticks = {
@@ -467,6 +547,7 @@ mod tests {
             .expect("failed to write file content");
         (dir, file_path)
     }
+
 
     #[test]
     fn test_plugin_detect_and_enrich() {

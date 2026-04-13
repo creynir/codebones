@@ -740,6 +740,31 @@ pub fn pack(
         }
     }
 
+    // Sort paths by inbound import count (descending) so the packer keeps
+    // the most-imported files when the token budget forces skeleton truncation.
+    {
+        let all_edges = cache.list_all_imports().unwrap_or_default();
+        let mut import_count: HashMap<String, usize> = HashMap::new();
+        for (_, target) in &all_edges {
+            *import_count.entry(target.clone()).or_insert(0) += 1;
+        }
+        paths.sort_by(|a, b| {
+            let a_rel = a
+                .strip_prefix(base_dir)
+                .unwrap_or(a)
+                .to_string_lossy()
+                .to_string();
+            let b_rel = b
+                .strip_prefix(base_dir)
+                .unwrap_or(b)
+                .to_string_lossy()
+                .to_string();
+            let a_count = import_count.get(&a_rel).copied().unwrap_or(0);
+            let b_count = import_count.get(&b_rel).copied().unwrap_or(0);
+            b_count.cmp(&a_count).then(a_rel.cmp(&b_rel))
+        });
+    }
+
     let packer = Packer::with_workspace_root(
         cache,
         crate::parser::Parser {},
