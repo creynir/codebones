@@ -2438,3 +2438,211 @@ fn pack_no_files_skeleton_map_respects_token_budget() -> Result<(), Box<dyn std:
 
     Ok(())
 }
+
+// ===========================================================================
+// Auto-reindex: ensure_fresh() — AC1-5, AC7
+//
+// These tests FAIL today because search/get/outline/graph don't call
+// ensure_fresh() (or index()) before querying. They will pass once
+// ensure_fresh() is wired into every read command.
+// ===========================================================================
+
+/// AC1: `search` auto-reindexes and returns results for a newly added file
+/// without the user running `index` first.
+#[test]
+fn search_auto_reindexes_newly_added_file() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+
+    // Seed with one file and perform the initial index.
+    fs::write(dir.path().join("lib.rs"), "pub fn existing() {}\n")?;
+    api::index(dir.path())?;
+
+    // Add a new file AFTER the initial index — no manual re-index.
+    fs::write(dir.path().join("new.rs"), "pub fn brand_new() {}\n")?;
+
+    // search must detect the new file and auto-reindex before querying.
+    let results = api::search(dir.path(), "brand_new")?;
+    assert!(
+        !results.is_empty(),
+        "search should auto-reindex and find 'brand_new' without a manual index call; got: {:?}",
+        results
+    );
+    Ok(())
+}
+
+/// AC2: `get` auto-reindexes and retrieves a newly added symbol without manual `index`.
+#[test]
+fn get_auto_reindexes_newly_added_symbol() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+
+    fs::write(dir.path().join("lib.rs"), "pub fn existing() {}\n")?;
+    api::index(dir.path())?;
+
+    // Add a new file with a new symbol AFTER the initial index.
+    fs::write(dir.path().join("extra.rs"), "pub fn fresh_symbol() {}\n")?;
+
+    // get must auto-reindex so the symbol is present.
+    let content = api::get(dir.path(), "extra.rs::fresh_symbol")?;
+    assert!(
+        content.contains("fresh_symbol"),
+        "get should auto-reindex and return content for 'fresh_symbol'; got: {content}"
+    );
+    Ok(())
+}
+
+/// AC3: `outline` auto-reindexes and works on a newly added file without manual `index`.
+#[test]
+fn outline_auto_reindexes_newly_added_file() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+
+    fs::write(dir.path().join("lib.rs"), "pub fn existing() {}\n")?;
+    api::index(dir.path())?;
+
+    // Add a new file AFTER the initial index.
+    fs::write(
+        dir.path().join("new_module.rs"),
+        "pub fn outlined_fn() { let x = 1; }\n",
+    )?;
+
+    // outline must auto-reindex and succeed on the new file.
+    let result = api::outline(dir.path(), "new_module.rs");
+    assert!(
+        result.is_ok(),
+        "outline should auto-reindex and not error on a newly added file; got: {:?}",
+        result.err()
+    );
+    let text = result.unwrap();
+    assert!(
+        text.contains("outlined_fn"),
+        "outline output should contain the function name 'outlined_fn'; got: {text}"
+    );
+    Ok(())
+}
+
+/// AC4: `graph` auto-reindexes and includes a newly added file in the graph
+/// without manual `index`.
+#[test]
+fn graph_auto_reindexes_newly_added_file() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+
+    fs::write(dir.path().join("lib.rs"), "pub fn existing() {}\n")?;
+    api::index(dir.path())?;
+
+    // Add a new file AFTER the initial index.
+    fs::write(dir.path().join("graph_new.rs"), "pub fn graph_fn() {}\n")?;
+
+    // graph must auto-reindex so the new file appears in the result.
+    let result = api::graph(dir.path())?;
+    let file_paths: Vec<&str> = result.files.iter().map(|f| f.path.as_str()).collect();
+    assert!(
+        file_paths.iter().any(|p| p.contains("graph_new.rs")),
+        "graph should auto-reindex and include 'graph_new.rs'; files: {:?}",
+        file_paths
+    );
+    Ok(())
+}
+
+/// AC5a: `pack` still works correctly after the ensure_fresh migration.
+#[test]
+fn pack_works_correctly_via_ensure_fresh() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+
+    fs::write(dir.path().join("lib.rs"), "pub fn pack_me() {}\n")?;
+    // No manual index — pack must index internally via ensure_fresh.
+    let output = api::pack(dir.path(), "markdown", None, default_pack_options())?;
+    assert!(
+        output.contains("pack_me"),
+        "pack output should contain 'pack_me'; got: {output}"
+    );
+    Ok(())
+}
+
+/// AC5b: `pack` picks up a newly added file without manual re-index.
+#[test]
+fn pack_picks_up_newly_added_file() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+
+    fs::write(dir.path().join("lib.rs"), "pub fn first() {}\n")?;
+    api::index(dir.path())?;
+
+    // Add a new file after the initial index.
+    fs::write(dir.path().join("second.rs"), "pub fn second_fn() {}\n")?;
+
+    // pack must pick it up without a manual re-index call.
+    let output = api::pack(dir.path(), "markdown", None, default_pack_options())?;
+    assert!(
+        output.contains("second_fn"),
+        "pack should auto-reindex and include 'second_fn'; got: {output}"
+    );
+    Ok(())
+}
+
+/// AC7: When files change after the initial index, the very next read command
+/// picks up those changes automatically (not just pack).
+#[test]
+fn search_picks_up_changes_after_initial_index() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+
+    // Create and index a file.
+    fs::write(dir.path().join("lib.rs"), "pub fn original() {}\n")?;
+    api::index(dir.path())?;
+
+    // Modify the existing file to add a new symbol — no manual re-index.
+    fs::write(
+        dir.path().join("lib.rs"),
+        "pub fn original() {}\npub fn modified_symbol() {}\n",
+    )?;
+
+    // search must pick up the modified file.
+    let results = api::search(dir.path(), "modified_symbol")?;
+    assert!(
+        !results.is_empty(),
+        "search should detect the changed file and find 'modified_symbol' without manual re-index; got: {:?}",
+        results
+    );
+    Ok(())
+}
+
+/// AC7 (get variant): `get` picks up a symbol added to an already-indexed file.
+#[test]
+fn get_picks_up_changes_after_initial_index() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+
+    fs::write(dir.path().join("lib.rs"), "pub fn original() {}\n")?;
+    api::index(dir.path())?;
+
+    // Add a new symbol to the existing file — no manual re-index.
+    fs::write(
+        dir.path().join("lib.rs"),
+        "pub fn original() {}\npub fn added_later() {}\n",
+    )?;
+
+    let content = api::get(dir.path(), "lib.rs::added_later")?;
+    assert!(
+        content.contains("added_later"),
+        "get should detect the changed file and return 'added_later' without manual re-index; got: {content}"
+    );
+    Ok(())
+}
+
+/// AC1 (no prior index): `search` works even when `.codebones/codebones.db`
+/// does not exist yet — ensure_fresh must run a full index in this case.
+#[test]
+fn search_works_with_no_prior_index() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    fs::write(dir.path().join("lib.rs"), "pub fn never_indexed() {}\n")?;
+
+    // No index call — the db doesn't exist yet.
+    assert!(
+        !dir.path().join(".codebones").join("codebones.db").exists(),
+        "pre-condition: db must not exist before this test"
+    );
+
+    let results = api::search(dir.path(), "never_indexed")?;
+    assert!(
+        !results.is_empty(),
+        "search should auto-index from scratch when no db exists; got: {:?}",
+        results
+    );
+    Ok(())
+}
