@@ -202,12 +202,27 @@ fn format_graph(
     }
 }
 
-fn format_blast_radius(file_path: &str, affected: &[String], format: &str) -> String {
+fn format_blast_radius(
+    file_path: &str,
+    affected: &[codebones_core::api::AffectedFile],
+    format: &str,
+) -> String {
     match format {
         "json" => {
             let files_json: Vec<String> = affected
                 .iter()
-                .map(|f| format!("\"{}\"", escape_json(f)))
+                .map(|f| {
+                    let imports_json: Vec<String> = f
+                        .imports
+                        .iter()
+                        .map(|i| format!("\"{}\"", escape_json(i)))
+                        .collect();
+                    format!(
+                        r#"{{"path":"{}","imports":[{}]}}"#,
+                        escape_json(&f.path),
+                        imports_json.join(",")
+                    )
+                })
                 .collect();
             format!(
                 r#"{{"file":"{}","affected_files":[{}]}}"#,
@@ -220,7 +235,7 @@ fn format_blast_radius(file_path: &str, affected: &[String], format: &str) -> St
             out.push_str(&format!("  <file>{}</file>\n", escape_xml(file_path)));
             out.push_str("  <affected>\n");
             for f in affected {
-                out.push_str(&format!("    <file>{}</file>\n", escape_xml(f)));
+                out.push_str(&format!("    <file>{}</file>\n", escape_xml(&f.path)));
             }
             out.push_str("  </affected>\n</blast_radius>");
             out
@@ -233,7 +248,10 @@ fn format_blast_radius(file_path: &str, affected: &[String], format: &str) -> St
                 affected.len()
             );
             for f in affected {
-                out.push_str(&format!("- {}\n", f));
+                out.push_str(&format!("- {}\n", f.path));
+                if !f.imports.is_empty() {
+                    out.push_str(&format!("  imports: {}\n", f.imports.join(", ")));
+                }
             }
             out
         }

@@ -1630,14 +1630,14 @@ fn graph_file_returns_affected_files_for_direct_importers() -> Result<(), Box<dy
         "changing db.ts must affect at least one file"
     );
     assert!(
-        result.affected_files.iter().any(|f| f.contains("utils.ts")),
+        result.affected_files.iter().any(|f| f.path.contains("utils.ts")),
         "utils.ts must be in the blast radius of db.ts; got: {:?}",
-        result.affected_files
+        result.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
     );
     assert!(
-        result.affected_files.iter().any(|f| f.contains("main.ts")),
+        result.affected_files.iter().any(|f| f.path.contains("main.ts")),
         "main.ts must be in the blast radius of db.ts (direct import); got: {:?}",
-        result.affected_files
+        result.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
     );
 
     Ok(())
@@ -1658,16 +1658,16 @@ fn graph_file_blast_radius_follows_reverse_edges() -> Result<(), Box<dyn std::er
     let result = api::graph_file(dir.path(), "src/utils.ts", 3).expect("graph_file should succeed");
 
     assert!(
-        result.affected_files.iter().any(|f| f.contains("main.ts")),
+        result.affected_files.iter().any(|f| f.path.contains("main.ts")),
         "main.ts must be in the blast radius of utils.ts (main imports utils); got: {:?}",
-        result.affected_files
+        result.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
     );
 
     // db.ts is NOT affected by changing utils.ts (db doesn't import utils).
     assert!(
-        !result.affected_files.iter().any(|f| f.contains("db.ts")),
+        !result.affected_files.iter().any(|f| f.path.contains("db.ts")),
         "db.ts must NOT be in the blast radius of utils.ts; got: {:?}",
-        result.affected_files
+        result.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
     );
 
     Ok(())
@@ -1708,17 +1708,17 @@ fn graph_file_respects_max_depth_limit() -> Result<(), Box<dyn std::error::Error
         result_depth1
             .affected_files
             .iter()
-            .any(|f| f.contains("c.ts")),
+            .any(|f| f.path.contains("c.ts")),
         "c.ts must be in depth=1 blast radius of d.ts; got: {:?}",
-        result_depth1.affected_files
+        result_depth1.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
     );
     assert!(
         !result_depth1
             .affected_files
             .iter()
-            .any(|f| f.contains("a.ts")),
+            .any(|f| f.path.contains("a.ts")),
         "a.ts must NOT be in depth=1 blast radius of d.ts (too deep); got: {:?}",
-        result_depth1.affected_files
+        result_depth1.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
     );
 
     // Changing d.ts with depth=3: a.ts, b.ts, c.ts should all be in blast radius.
@@ -1728,9 +1728,9 @@ fn graph_file_respects_max_depth_limit() -> Result<(), Box<dyn std::error::Error
         result_depth3
             .affected_files
             .iter()
-            .any(|f| f.contains("a.ts")),
+            .any(|f| f.path.contains("a.ts")),
         "a.ts must be in depth=3 blast radius of d.ts; got: {:?}",
-        result_depth3.affected_files
+        result_depth3.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
     );
 
     Ok(())

@@ -28,10 +28,18 @@ pub struct GraphResult {
     pub edges: Vec<GraphEdge>,
 }
 
+/// A file that is affected by a blast radius change, along with the raw import
+/// strings it uses to reference the target file.
+#[derive(Debug, Clone)]
+pub struct AffectedFile {
+    pub path: String,
+    pub imports: Vec<String>,
+}
+
 /// Blast radius result for a specific file.
 #[derive(Debug, Clone)]
 pub struct BlastRadiusResult {
-    pub affected_files: Vec<String>,
+    pub affected_files: Vec<AffectedFile>,
 }
 
 const CODEBONES_SECTION: &str = r#"
@@ -607,7 +615,7 @@ pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<Blast
     let mut queue: VecDeque<String> = VecDeque::new();
     queue.push_back(file_path.to_string());
 
-    let mut affected: Vec<String> = Vec::new();
+    let mut affected_paths: Vec<String> = Vec::new();
     let mut depth = 0usize;
 
     while !queue.is_empty() && depth < max_depth {
@@ -617,7 +625,7 @@ pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<Blast
                 if let Some(importers) = reverse.get(&current) {
                     for importer in importers {
                         if visited.insert(importer.clone()) {
-                            affected.push(importer.clone());
+                            affected_paths.push(importer.clone());
                             queue.push_back(importer.clone());
                         }
                     }
@@ -625,6 +633,23 @@ pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<Blast
             }
         }
         depth += 1;
+    }
+
+    // For each affected file, look up which of its imports reference the target file.
+    let mut affected: Vec<AffectedFile> = Vec::new();
+    for path in affected_paths {
+        let raw_imports = cache.get_imports(&path)?;
+        let imports: Vec<String> = raw_imports
+            .into_iter()
+            .filter_map(|(target_path, raw_import)| {
+                if target_path.contains(file_path) || file_path.contains(&target_path) {
+                    Some(raw_import)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        affected.push(AffectedFile { path, imports });
     }
 
     Ok(BlastRadiusResult {

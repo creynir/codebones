@@ -81,14 +81,20 @@ fn format_graph_mcp(
     }
 }
 
-fn format_blast_radius_mcp(file_path: &str, affected: &[String]) -> String {
+fn format_blast_radius_mcp(
+    file_path: &str,
+    affected: &[codebones_core::api::AffectedFile],
+) -> String {
     let mut out = format!(
         "# Blast Radius: {}\n\n## Affected Files ({})\n",
         file_path,
         affected.len()
     );
     for f in affected {
-        out.push_str(&format!("- {}\n", f));
+        out.push_str(&format!("- {}\n", f.path));
+        if !f.imports.is_empty() {
+            out.push_str(&format!("  imports: {}\n", f.imports.join(", ")));
+        }
     }
     out
 }
