@@ -1,7 +1,5 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-#[allow(unused_imports)]
-use serde_json;
 use std::fs;
 use tempfile::TempDir;
 

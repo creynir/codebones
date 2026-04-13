@@ -5,3 +5,5 @@ codebones.db
 .cursor/
 .claude/
 lab/
+docs/**/key*
+docs/key*
