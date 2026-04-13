@@ -211,7 +211,79 @@ pub fn index(dir: &Path) -> Result<()> {
         }
     }
 
+    // Write last_commit file if this is a git repo
+    if dir.join(".git").exists() {
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(dir)
+            .output()
+        {
+            if output.status.success() {
+                let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let _ = fs::write(dir.join(".codebones").join("last_commit"), &hash);
+            }
+        }
+    }
+
     Ok(())
+}
+
+/// Checks whether the index is fresh and skips re-indexing when the git repo is
+/// clean and HEAD has not changed since the last index. Falls back to a full
+/// `index()` call in all other cases (no DB, no git, dirty tree, HEAD changed).
+fn ensure_fresh(dir: &Path) -> Result<()> {
+    let db_path = dir.join(".codebones").join("codebones.db");
+
+    // No db yet — must index
+    if !db_path.exists() {
+        return index(dir);
+    }
+
+    // No git — always re-index (can't fast-check)
+    if !dir.join(".git").exists() {
+        return index(dir);
+    }
+
+    // Check if HEAD changed since last index
+    let last_commit_path = dir.join(".codebones").join("last_commit");
+    let stored_hash = fs::read_to_string(&last_commit_path).unwrap_or_default();
+    let stored_hash = stored_hash.trim().to_string();
+
+    let current_hash = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+
+    if stored_hash != current_hash {
+        return index(dir); // HEAD changed
+    }
+
+    // Check for uncommitted changes to tracked files
+    let dirty = std::process::Command::new("git")
+        .args(["diff-index", "--quiet", "HEAD", "--"])
+        .current_dir(dir)
+        .status()
+        .map(|s| !s.success()) // exit 1 = dirty
+        .unwrap_or(true); // assume dirty on error
+
+    // Also check for untracked files
+    let untracked = std::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(dir)
+        .output()
+        .ok()
+        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
+        .unwrap_or(true);
+
+    if dirty || untracked {
+        return index(dir); // Working tree dirty
+    }
+
+    Ok(()) // Everything clean — skip indexing
 }
 
 /// Attempts to resolve a raw import string to a known file path in the cache.
@@ -329,7 +401,7 @@ fn db_path(dir: &Path) -> Result<std::path::PathBuf> {
 /// `.codebones/codebones.db` is a trust boundary: callers must ensure the database file has
 /// appropriate filesystem permissions and has not been tampered with.
 pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
-    index(dir)?;
+    ensure_fresh(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -362,7 +434,7 @@ pub fn get(dir: &Path, symbol_or_path: &str) -> Result<String> {
 /// `codebones.db` is a trust boundary: callers must ensure the database file has
 /// appropriate filesystem permissions and has not been tampered with.
 pub fn outline(dir: &Path, path: &str) -> Result<String> {
-    index(dir)?;
+    ensure_fresh(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -411,7 +483,7 @@ pub fn outline(dir: &Path, path: &str) -> Result<String> {
 ///
 /// Returns a list of fully-qualified symbol ID strings; an empty vec means no matches.
 pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
-    index(dir)?;
+    ensure_fresh(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -431,7 +503,7 @@ pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> {
 ///
 /// Returns an empty vec if the file has no imports. Run `index` first to populate the cache.
 pub fn get_imports(dir: &Path, file_path: &str) -> Result<Vec<String>> {
-    index(dir)?;
+    ensure_fresh(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -446,7 +518,7 @@ pub fn get_imports(dir: &Path, file_path: &str) -> Result<Vec<String>> {
 ///
 /// Returns an empty vec if nothing imports the target. Run `index` first to populate the cache.
 pub fn get_importers(dir: &Path, file_path: &str) -> Result<Vec<String>> {
-    index(dir)?;
+    ensure_fresh(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -464,7 +536,7 @@ pub fn get_importers(dir: &Path, file_path: &str) -> Result<Vec<String>> {
 /// Files are sorted by inbound import count (descending). Edges represent `from → to` import
 /// relationships exactly as recorded in the cache.
 pub fn graph(dir: &Path) -> Result<GraphResult> {
-    index(dir)?;
+    ensure_fresh(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -510,7 +582,7 @@ pub fn graph(dir: &Path) -> Result<GraphResult> {
 /// Returns the blast radius for `file_path`: all files that (transitively) import it,
 /// discovered via BFS up to `max_depth` hops on the reverse import graph.
 pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<BlastRadiusResult> {
-    index(dir)?;
+    ensure_fresh(dir)?;
     let db_path = db_path(dir)?;
     let db_path_str = db_path
         .to_str()
@@ -657,7 +729,7 @@ pub fn pack(
     };
 
     // Ensure the cache is up to date before packing
-    index(base_dir)?;
+    ensure_fresh(base_dir)?;
 
     let db_path = db_path(base_dir)?;
     let db_path_str = db_path
