@@ -4,3 +4,4 @@ scripts/run_feature_benchmarks.py
 codebones.db
 .cursor/
 .claude/
+lab/

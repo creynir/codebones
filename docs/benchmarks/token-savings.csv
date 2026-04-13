@@ -1,0 +1,49 @@
+dataset,scenario,method,tokens,details
+small,orientation,raw_source,43146,all source files
+small,orientation,codebones_map,5808,codebones map --format markdown
+small,impact_analysis,codebones_graph,15,CHANGELOG.md
+small,impact_analysis,codebones_graph,15,CHECKLIST.md
+small,impact_analysis,codebones_graph,15,CONTRIBUTING.md
+small,impact_analysis,raw_source,43146,must read all files to trace imports
+small,symbol_retrieval,raw_file,695,tests/test_agent_result.py
+small,symbol_retrieval,codebones_get,747,tests/test_agent_result.py::TestAgentResult
+small,symbol_retrieval,raw_file,695,tests/test_agent_result.py
+small,symbol_retrieval,codebones_get,75,tests/test_agent_result.py::TestAgentResult.test_create_empty_result
+small,symbol_retrieval,raw_file,695,tests/test_agent_result.py
+small,symbol_retrieval,codebones_get,93,tests/test_agent_result.py::TestAgentResult.test_successful_result
+small,budget_efficiency,codebones_pack,7871,max_tokens=8000 symbols_visible=529
+small,budget_efficiency,codebones_pack,16791,max_tokens=16000 symbols_visible=774
+small,budget_efficiency,codebones_pack,21587,max_tokens=32000 symbols_visible=777
+small,budget_efficiency,codebones_pack,21587,max_tokens=64000 symbols_visible=777
+medium,orientation,raw_source,7337966,all source files
+medium,orientation,codebones_map,298330,codebones map --format markdown
+medium,impact_analysis,codebones_graph,261,service/history/workflow/context.go
+medium,impact_analysis,codebones_graph,151,chasm/context.go
+medium,impact_analysis,codebones_graph,116,service/frontend/errors.go
+medium,impact_analysis,raw_source,7337966,must read all files to trace imports
+medium,symbol_retrieval,raw_file,290,temporal/server.go
+medium,symbol_retrieval,codebones_get,212,temporal/server.go::NewServer
+medium,symbol_retrieval,raw_file,864,temporal/server_options.go
+medium,symbol_retrieval,codebones_get,69,temporal/server_options.go::newServerOptions
+medium,symbol_retrieval,raw_file,864,temporal/server_options.go
+medium,symbol_retrieval,codebones_get,169,temporal/server_options.go::loadAndValidate
+medium,budget_efficiency,codebones_pack,368149,max_tokens=8000 symbols_visible=30524
+medium,budget_efficiency,codebones_pack,368149,max_tokens=16000 symbols_visible=30524
+medium,budget_efficiency,codebones_pack,368149,max_tokens=32000 symbols_visible=30524
+medium,budget_efficiency,codebones_pack,368149,max_tokens=64000 symbols_visible=30524
+large,orientation,raw_source,14945989,all source files
+large,orientation,codebones_map,690544,codebones map --format markdown
+large,impact_analysis,codebones_graph,466,packages/testing/playwright/pages/BasePage.ts
+large,impact_analysis,codebones_graph,547,packages/@n8n/db/src/entities/abstract-entity.ts
+large,impact_analysis,codebones_graph,358,packages/cli/test/integration/shared/db/users.ts
+large,impact_analysis,raw_source,14945989,must read all files to trace imports
+large,symbol_retrieval,raw_file,187,packages/core/test/utils.ts
+large,symbol_retrieval,codebones_get,105,packages/core/test/utils.ts::toStream
+large,symbol_retrieval,raw_file,29576,packages/core/test/helpers/constants.ts
+large,symbol_retrieval,codebones_get,23465,packages/core/test/helpers/constants.ts::execute
+large,symbol_retrieval,raw_file,1099,packages/core/test/helpers/index.ts
+large,symbol_retrieval,codebones_get,166,packages/core/test/helpers/index.ts::NodeTypesClass
+large,budget_efficiency,codebones_pack,1165317,max_tokens=8000 symbols_visible=40816
+large,budget_efficiency,codebones_pack,1165317,max_tokens=16000 symbols_visible=40816
+large,budget_efficiency,codebones_pack,1165317,max_tokens=32000 symbols_visible=40816
+large,budget_efficiency,codebones_pack,1165317,max_tokens=64000 symbols_visible=40816

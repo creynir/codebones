@@ -1,4 +1,4 @@
-# 🦴 codebones
+# codebones
 
 **AST-aware code indexing for LLMs.** Token-budget packing with graceful degradation — full files when there's room, structural skeletons when there isn't.
 
@@ -11,37 +11,23 @@
   <img src="assets/demo.gif" alt="codebones demo" width="800" />
 </p>
 
-```xml
-<repository>
-  <skeleton_map>
-    <file path="./src/api.rs">
-      <signature>Function index</signature>
-      <signature>Function pack</signature>
-      <signature>Function search</signature>
-      <signature>Function get</signature>
-    </file>
-    <file path="./src/parser.rs">
-      <signature>Struct LanguageSpec</signature>
-      <signature>Function parse_document</signature>
-      <signature>Function extract_symbols</signature>
-    </file>
-  </skeleton_map>
-  <file path="./src/api.rs">
-    <content><![CDATA[
-pub fn index(dir: &Path) -> Result<()> ...
-
-pub fn pack(dir: &Path, format: Format, max_tokens: Option<usize>) -> Result<String> ...
-
-pub fn search(dir: &Path, query: &str) -> Result<Vec<String>> ...
-
-pub fn get(dir: &Path, symbol: &str) -> Result<String> ...
-]]></content>
-  </file>
-</repository>
-```
-
 codebones parses your codebase with tree-sitter, caches the AST in SQLite, and packs everything into a single LLM-ready payload. When the token budget runs out, it drops function bodies and keeps signatures — so the model always sees the full structure.
-Symbol lookup takes 4ms on a 2M LOC codebase. Competitors time out.
+
+A `codebones map` of the n8n codebase (2M LOC) is **22x smaller** than the raw source — 691K tokens instead of 14.9M. Symbol lookup takes 4ms on a repo that size. Competitors time out.
+
+## Token savings
+
+The core metric: how many tokens does an AI need to orient in your codebase?
+
+| Project | Raw source | codebones map | Reduction |
+|---|---:|---:|---:|
+| [agenthelm](https://github.com/hadywalied/agenthelm) (6.25K LOC, Python) | 43,146 | 5,808 | **7x** |
+| [temporal](https://github.com/temporalio/temporal) (833K LOC, Go) | 7,337,966 | 298,330 | **25x** |
+| [n8n](https://github.com/n8n-io/n8n) (2.07M LOC, TypeScript) | 14,945,989 | 690,544 | **22x** |
+
+`codebones map` gives an AI the complete structural overview — every file, every function signature, every class — at a fraction of the token cost of reading raw source. For targeted queries, the savings are even larger: `codebones graph src/api.rs` returns the blast radius in ~500 tokens instead of millions.
+
+Full benchmark methodology and reproducible scripts in [docs/benchmarks/](docs/benchmarks/).
 
 ## Install
 
@@ -53,16 +39,25 @@ cargo install codebones
 pip install codebones
 ```
 
-The Python package installs the `codebones` and `codebones-mcp` binaries. It does not currently expose a separate Python API.
+The Python package installs the `codebones` and `codebones-mcp` binaries.
 
 ## Quick start
 
 ```bash
-# Index the current repo (creates codebones.db)
+# Index the current repo
 codebones index .
+
+# Skeleton map — structural overview without file contents
+codebones map
 
 # Pack into a single AI-ready payload within a token budget
 codebones pack . --format markdown --max-tokens 120000 > context.md
+
+# Import graph — see which files are most imported
+codebones graph
+
+# Blast radius — what breaks if you change this file?
+codebones graph src/api.rs
 
 # Search for symbols across the codebase
 codebones search "Authentication"
@@ -73,26 +68,28 @@ codebones get "MyClass.my_method"
 # View a file's structural skeleton
 codebones outline src/main.rs
 
-# Query an indexed repo without changing cwd
-codebones search --dir /path/to/repo "Authentication"
+# Register codebones with Claude Code, Cursor, etc.
+codebones init
 ```
 
 ## What it does
 
 | Feature | What you get |
 |---|---|
-| **AST-aware parsing** | Function signatures, class hierarchies, and impl blocks extracted via tree-sitter across 11 languages |
+| **AST-aware parsing** | Function signatures, class hierarchies, and impl blocks extracted via tree-sitter across 12 languages |
+| **Import graph** | Dependency tracking across all 12 languages — see which files import what, find hot files, and compute blast radius for any change |
 | **Token-budget packing** | Full files until the budget fills, then automatic degradation to structural skeletons — no manual trimming |
-| **Skeleton map** | Aider-style hierarchical repo map at the top of every payload so the LLM orients instantly |
+| **Skeleton map** | Hierarchical repo map at the top of every payload so the LLM orients instantly |
 | **O(1) symbol retrieval** | SQLite cache with byte-offset indexing — `substr()` reads, no re-parsing |
 | **Secret filtering** | `.env`, private keys, credentials, and PEM files automatically excluded from output |
 | **Incremental indexing** | SHA-256 file hashing — only re-parses changed files on subsequent runs |
+| **First-run setup** | `index` auto-creates `.codebones/`, adds to `.gitignore`, and appends hints to `CLAUDE.md`/`AGENTS.md` |
 
 **Supported languages:** Rust, Python, Go, TypeScript, JavaScript, Java, C, C++, C#, Ruby, PHP, Swift.
 
 ## Output
 
-### `codebones pack --format markdown`
+### `codebones map --format markdown`
 
 ```markdown
 ## Skeleton Map
@@ -107,21 +104,6 @@ codebones search --dir /path/to/repo "Authentication"
   - Impl User
   - Function User.new
   - Function User.display
-
-## ./main.py
-
-def add(a, b):...
-
-class Calculator:...
-
-## ./test.rs
-
-/// A greeting function
-pub fn greet(name: &str) -> String ...
-
-pub struct User ...
-
-impl User ...
 ```
 
 ### `codebones outline src/main.rs`
@@ -137,48 +119,73 @@ impl User ...
 
 Bodies are replaced with `...`. Doc comments and signatures are preserved.
 
+### `codebones graph --format markdown`
+
+```markdown
+# Import Graph
+
+## Most Imported Files
+- `src/db.ts` — imported by **3** files
+- `src/utils.ts` — imported by **2** files
+
+## Import Map
+- `src/main.ts` -> src/utils.ts, src/db.ts
+- `src/utils.ts` -> src/db.ts
+```
+
+### `codebones graph src/db.ts`
+
+```markdown
+# Blast Radius: src/db.ts
+
+## Affected Files (2)
+- src/utils.ts
+- src/main.ts
+```
+
 ## How it works
 
-1. **Index** — Walks the directory, filters out binaries and secrets, hashes each file with SHA-256. Only changed files are re-parsed.
-2. **Parse** — Tree-sitter extracts symbols (functions, classes, structs, impls) with byte ranges and qualified names (`MyClass.my_method`).
-3. **Cache** — Symbols and file contents are stored in a SQLite database (`.codebones`). Byte offsets enable O(1) retrieval via `substr()`.
+1. **Index** — Walks the directory, filters out binaries and secrets, hashes each file with SHA-256. Only changed files are re-parsed. Extracts import statements across all 12 languages and builds the dependency graph.
+2. **Parse** — Tree-sitter extracts symbols (functions, classes, structs, impls) with byte ranges and qualified names (`MyClass.my_method`), plus import/dependency edges.
+3. **Cache** — Symbols, imports, and file contents are stored in a SQLite database (`.codebones/codebones.db`). Byte offsets enable O(1) retrieval via `substr()`.
 4. **Pack** — Assembles a Markdown or XML payload. Counts tokens with `tiktoken` (cl100k_base). When the budget is exceeded, drops file contents and keeps the skeleton map.
 
-## Benchmarks
+## Speed benchmarks
 
-All numbers are cold-start medians in milliseconds. Full methodology and raw data in [docs/benchmarks/](docs/benchmarks/README.md).
+All numbers are cold-start medians in milliseconds. Full methodology and raw data in [docs/benchmarks/](docs/benchmarks/).
 
 ### Symbol lookup
 
 | Dataset | codebones | ast-grep | grep-ast | tree-sitter-mcp | jcodemunch-mcp |
 |---|---:|---:|---:|---:|---:|
-| 6,250 LOC | **4.02** | 11.93 | 484.22 | 196.19 | 58.50 |
-| 832,991 LOC | **10.45** | 432.79 | 8,208.27 | TIMEOUT | 199.83 |
-| 2,068,515 LOC | **11.82** | 1,998.44 | TIMEOUT | TIMEOUT | 104.54 |
+| agenthelm (6.25K LOC, Python) | **4.02** | 11.93 | 484.22 | 196.19 | 58.50 |
+| temporal (833K LOC, Go) | **10.45** | 432.79 | 8,208.27 | TIMEOUT | 199.83 |
+| n8n (2.07M LOC, TypeScript) | **11.82** | 1,998.44 | TIMEOUT | TIMEOUT | 104.54 |
 
 ### Indexing
 
 | Dataset | codebones | jcodemunch-mcp |
 |---|---:|---:|
-| 6,250 LOC | **8.45** | 76.77 |
-| 832,991 LOC | **290** | 754.05 |
-| 2,068,515 LOC | **1,310** | 8,249.67 |
+| agenthelm (6.25K LOC, Python) | **8.45** | 76.77 |
+| temporal (833K LOC, Go) | **290** | 754.05 |
+| n8n (2.07M LOC, TypeScript) | **1,310** | 8,249.67 |
 
 ### Context packing
 
 | Dataset | codebones | repomix |
 |---|---:|---:|
-| 6,250 LOC | **50** | 947 |
-| 832,991 LOC | **2,580** | 10,237 |
-| 2,068,515 LOC | **7,930** | 11,548 |
+| agenthelm (6.25K LOC, Python) | **50** | 947 |
+| temporal (833K LOC, Go) | **2,580** | 10,237 |
+| n8n (2.07M LOC, TypeScript) | **7,930** | 11,548 |
 
 100% correctness (hit@1, precision, recall) across all datasets. Benchmark machine: macOS 15.7.1, Apple M4, 16 GB RAM.
 
 ## Limitations
 
-- **Language coverage** — Only 11 languages have AST support. Unsupported files are indexed as plain text (no symbol extraction or body elision).
+- **Language coverage** — 12 languages have AST support. Unsupported files are indexed as plain text (no symbol extraction or body elision).
 - **File size cap** — Files over 500 KB are skipped. Large generated files and vendored code won't appear in output.
 - **Scope tracking** — Qualified names are built from AST container nodes (class, impl, namespace). Some scope types aren't tracked: Go packages, Python module-level groupings, Rust trait bounds.
+- **Import resolution** — Python module-style imports (`from agenthelm.core import event`) are stored as-is and may not resolve to file paths. Relative file path imports (`./utils`, `../db`) resolve correctly.
 - **Inline functions** — Single-expression bodies (Python lambdas, Rust closures, JS arrow functions in class fields) may not be elided correctly.
 - **Symlinks** — Skipped by default. When enabled, symlinks pointing outside the workspace root are rejected to prevent path traversal.
 
@@ -190,17 +197,37 @@ codebones includes a Model Context Protocol server for real-time codebase querie
 codebones-mcp
 ```
 
-Exposes `index`, `outline`, `get`, and `search` as MCP tools.
+Exposes `index`, `outline`, `get`, `search`, `map`, `graph`, and `graph_file` as MCP tools.
+
+Register it globally with one command:
+
+```bash
+codebones init
+```
+
+This detects Claude Code (`~/.claude/`) and Cursor (`~/.cursor/`) and adds the MCP server to their settings — without overriding existing configs.
 
 ## CLI reference
 
 ```
-codebones index <dir>                        Build/update the SQLite cache
+codebones init                               Register codebones-mcp with AI tools
+codebones index <dir>                        Build/update the cache and import graph
+codebones map [dir] [options]                Skeleton map only (shorthand for pack --no-files)
 codebones pack <dir> [options]               Pack repo into LLM-ready payload
+codebones graph [file] [options]             Import graph, hot files, or blast radius
 codebones search [--dir <repo>] <query>      Substring search across symbol names
 codebones get [--dir <repo>] <symbol>        Retrieve full source by symbol ID or file path
 codebones outline [--dir <repo>] <path>      Skeleton view of an indexed file
 ```
+
+### `map` options
+
+| Flag | Description |
+|---|---|
+| `--format markdown\|xml` | Output format (default: xml) |
+| `--max-tokens N` | Token budget |
+| `--include <glob>` | Only include matching files |
+| `--ignore <glob>` | Exclude matching files |
 
 ### `pack` options
 
@@ -212,15 +239,14 @@ codebones outline [--dir <repo>] <path>      Skeleton view of an indexed file
 | `--no-file-summary` | File contents only, no skeleton map |
 | `--remove-comments` | Strip comments from output |
 
-## Works with Phalanx
+### `graph` options
 
-[Phalanx](https://github.com/creynir/phalanx) is a multi-agent orchestration CLI. When phalanx agents work on a real codebase, codebones gives them a structural map upfront so each agent goes straight to work instead of spending tokens on code discovery.
-
-```bash
-codebones pack . --format markdown --max-tokens 40000 > context.md
-```
-
-Reference the output in your agent prompts so every agent arrives oriented.
+| Flag | Description |
+|---|---|
+| `<file>` | Show blast radius for this file (omit for full graph) |
+| `--format markdown\|xml\|json` | Output format (default: markdown) |
+| `--top N` | Show only the N most-imported files |
+| `--depth N` | Blast radius BFS depth (default: 3) |
 
 ## Plugins
 
