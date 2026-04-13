@@ -353,19 +353,18 @@ impl CodebonesMcpServer {
         }): Parameters<GetArgs>,
     ) -> Result<Json<GetResponse>, ErrorData> {
         Self::ensure_dir("get", &dir)?;
-        let content =
-            codebones_core::api::get(Path::new(&dir), &symbol_or_path, filter.as_deref())
-                .map_err(|error| {
-                    Self::map_lookup_error(
-                        "get",
-                        error.to_string(),
-                        rmcp::serde_json::json!({
-                            "tool": "get",
-                            "dir": dir,
-                            "symbol_or_path": symbol_or_path,
-                        }),
-                    )
-                })?;
+        let content = codebones_core::api::get(Path::new(&dir), &symbol_or_path, filter.as_deref())
+            .map_err(|error| {
+                Self::map_lookup_error(
+                    "get",
+                    error.to_string(),
+                    rmcp::serde_json::json!({
+                        "tool": "get",
+                        "dir": dir,
+                        "symbol_or_path": symbol_or_path,
+                    }),
+                )
+            })?;
 
         Ok(Json(GetResponse {
             dir,

@@ -1548,8 +1548,7 @@ fn test_graph_top_10_shows_ten_files() {
     assert_eq!(
         leaf_count, 10,
         "--top 10 must show exactly 10 leaf files; got {} in output:\n{}",
-        leaf_count,
-        stdout
+        leaf_count, stdout
     );
 }
 
@@ -1690,7 +1689,6 @@ fn test_map_explicit_max_tokens_8000_truncates() {
     );
 }
 
-
 // ===========================================================================
 // CLI: get --filter tests (failing — CLI flag not yet implemented)
 // ===========================================================================
@@ -1736,7 +1734,12 @@ pub fn small_fn(x: i32) -> i32 {
     let output = Command::cargo_bin("codebones")
         .unwrap()
         .current_dir(root)
-        .args(["get", "filter_fixture.rs::big_function", "--filter", "target"])
+        .args([
+            "get",
+            "filter_fixture.rs::big_function",
+            "--filter",
+            "target",
+        ])
         .assert()
         .success()
         .get_output()

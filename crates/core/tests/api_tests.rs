@@ -299,7 +299,8 @@ fn get_returns_file_content_for_path() -> Result<(), Box<dyn std::error::Error>>
     api::index(dir.path()).expect("index");
 
     // The file is stored in the DB by relative path.
-    let content = api::get(dir.path(), "lib.rs", None).expect("get should return file content for path");
+    let content =
+        api::get(dir.path(), "lib.rs", None).expect("get should return file content for path");
     assert!(
         content.contains("pub fn add"),
         "returned file content should contain expected function; got: {content}"
@@ -1266,8 +1267,8 @@ fn get_returns_full_source_for_file_with_unicode_content() -> Result<(), Box<dyn
     fs::write(dir.path().join("unicode.rs"), unicode_content).expect("write unicode file");
     api::index(dir.path()).expect("index");
 
-    let content =
-        api::get(dir.path(), "unicode.rs", None).expect("get file with unicode content should succeed");
+    let content = api::get(dir.path(), "unicode.rs", None)
+        .expect("get file with unicode content should succeed");
 
     assert!(
         content.contains("日本語コメント"),
@@ -1630,14 +1631,28 @@ fn graph_file_returns_affected_files_for_direct_importers() -> Result<(), Box<dy
         "changing db.ts must affect at least one file"
     );
     assert!(
-        result.affected_files.iter().any(|f| f.path.contains("utils.ts")),
+        result
+            .affected_files
+            .iter()
+            .any(|f| f.path.contains("utils.ts")),
         "utils.ts must be in the blast radius of db.ts; got: {:?}",
-        result.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        result
+            .affected_files
+            .iter()
+            .map(|f| &f.path)
+            .collect::<Vec<_>>()
     );
     assert!(
-        result.affected_files.iter().any(|f| f.path.contains("main.ts")),
+        result
+            .affected_files
+            .iter()
+            .any(|f| f.path.contains("main.ts")),
         "main.ts must be in the blast radius of db.ts (direct import); got: {:?}",
-        result.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        result
+            .affected_files
+            .iter()
+            .map(|f| &f.path)
+            .collect::<Vec<_>>()
     );
 
     Ok(())
@@ -1658,16 +1673,30 @@ fn graph_file_blast_radius_follows_reverse_edges() -> Result<(), Box<dyn std::er
     let result = api::graph_file(dir.path(), "src/utils.ts", 3).expect("graph_file should succeed");
 
     assert!(
-        result.affected_files.iter().any(|f| f.path.contains("main.ts")),
+        result
+            .affected_files
+            .iter()
+            .any(|f| f.path.contains("main.ts")),
         "main.ts must be in the blast radius of utils.ts (main imports utils); got: {:?}",
-        result.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        result
+            .affected_files
+            .iter()
+            .map(|f| &f.path)
+            .collect::<Vec<_>>()
     );
 
     // db.ts is NOT affected by changing utils.ts (db doesn't import utils).
     assert!(
-        !result.affected_files.iter().any(|f| f.path.contains("db.ts")),
+        !result
+            .affected_files
+            .iter()
+            .any(|f| f.path.contains("db.ts")),
         "db.ts must NOT be in the blast radius of utils.ts; got: {:?}",
-        result.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        result
+            .affected_files
+            .iter()
+            .map(|f| &f.path)
+            .collect::<Vec<_>>()
     );
 
     Ok(())
@@ -1710,7 +1739,11 @@ fn graph_file_respects_max_depth_limit() -> Result<(), Box<dyn std::error::Error
             .iter()
             .any(|f| f.path.contains("c.ts")),
         "c.ts must be in depth=1 blast radius of d.ts; got: {:?}",
-        result_depth1.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        result_depth1
+            .affected_files
+            .iter()
+            .map(|f| &f.path)
+            .collect::<Vec<_>>()
     );
     assert!(
         !result_depth1
@@ -1718,7 +1751,11 @@ fn graph_file_respects_max_depth_limit() -> Result<(), Box<dyn std::error::Error
             .iter()
             .any(|f| f.path.contains("a.ts")),
         "a.ts must NOT be in depth=1 blast radius of d.ts (too deep); got: {:?}",
-        result_depth1.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        result_depth1
+            .affected_files
+            .iter()
+            .map(|f| &f.path)
+            .collect::<Vec<_>>()
     );
 
     // Changing d.ts with depth=3: a.ts, b.ts, c.ts should all be in blast radius.
@@ -1730,7 +1767,11 @@ fn graph_file_respects_max_depth_limit() -> Result<(), Box<dyn std::error::Error
             .iter()
             .any(|f| f.path.contains("a.ts")),
         "a.ts must be in depth=3 blast radius of d.ts; got: {:?}",
-        result_depth3.affected_files.iter().map(|f| &f.path).collect::<Vec<_>>()
+        result_depth3
+            .affected_files
+            .iter()
+            .map(|f| &f.path)
+            .collect::<Vec<_>>()
     );
 
     Ok(())
@@ -1763,14 +1804,12 @@ fn graph_file_returns_empty_for_file_with_no_importers() -> Result<(), Box<dyn s
 /// target file.  This test fails until AffectedFile is introduced and graph_file()
 /// populates the imports field.
 #[test]
-fn graph_file_affected_files_include_import_details(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn graph_file_affected_files_include_import_details() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_ts_graph_fixture(&dir);
     api::index(dir.path()).expect("index");
 
-    let result =
-        api::graph_file(dir.path(), "src/db.ts", 3).expect("graph_file should succeed");
+    let result = api::graph_file(dir.path(), "src/db.ts", 3).expect("graph_file should succeed");
 
     assert!(
         !result.affected_files.is_empty(),
@@ -1793,14 +1832,12 @@ fn graph_file_affected_files_include_import_details(
 /// utils.ts has `import { db } from './db'` — the raw_import captured by the
 /// indexer must be present in its AffectedFile.imports list.
 #[test]
-fn graph_file_import_strings_match_source_import(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn graph_file_import_strings_match_source_import() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_ts_graph_fixture(&dir);
     api::index(dir.path()).expect("index");
 
-    let result =
-        api::graph_file(dir.path(), "src/db.ts", 3).expect("graph_file should succeed");
+    let result = api::graph_file(dir.path(), "src/db.ts", 3).expect("graph_file should succeed");
 
     let utils_entry = result
         .affected_files
@@ -1809,10 +1846,7 @@ fn graph_file_import_strings_match_source_import(
         .expect("utils.ts must be in the blast radius of db.ts");
 
     // The raw import captured at index time should reference "db" in some form.
-    let has_db_ref = utils_entry
-        .imports
-        .iter()
-        .any(|raw| raw.contains("db"));
+    let has_db_ref = utils_entry.imports.iter().any(|raw| raw.contains("db"));
 
     assert!(
         has_db_ref,
@@ -3051,7 +3085,11 @@ fn get_with_filter_returns_signature_and_matching_lines_with_context(
     write_rust_fixture(&dir, "filter_fixture.rs", FILTER_FIXTURE);
     api::index(dir.path())?;
 
-    let result = api::get(dir.path(), "filter_fixture.rs::big_function", Some("target"))?;
+    let result = api::get(
+        dir.path(),
+        "filter_fixture.rs::big_function",
+        Some("target"),
+    )?;
 
     // AC6: function signature is always included
     assert!(
@@ -3092,7 +3130,11 @@ fn get_with_filter_includes_one_line_of_context_around_each_match(
     write_rust_fixture(&dir, "filter_fixture.rs", FILTER_FIXTURE);
     api::index(dir.path())?;
 
-    let result = api::get(dir.path(), "filter_fixture.rs::big_function", Some("target"))?;
+    let result = api::get(
+        dir.path(),
+        "filter_fixture.rs::big_function",
+        Some("target"),
+    )?;
 
     // Line before "let target_value = x * 2" is "let c = 3;" — must appear as context
     assert!(
