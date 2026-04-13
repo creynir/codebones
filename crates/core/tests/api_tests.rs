@@ -2009,3 +2009,196 @@ fn init_exits_successfully_when_no_tools_detected() -> Result<(), Box<dyn std::e
 
     Ok(())
 }
+
+// ===========================================================================
+// Python module-style import resolution — RED (failing) tests
+//
+// These tests describe DESIRED behavior for Python dotted-module imports.
+// They will fail until resolve_import() is taught to convert dotted module
+// paths into file paths (e.g., `src.core.event` → `src/core/event.py`).
+// ===========================================================================
+
+/// Helper: build the multi-file Python fixture described in the ticket.
+///
+/// Layout:
+///   src/__init__.py            (empty)
+///   src/core/__init__.py       (empty)
+///   src/core/event.py          (no imports — the shared target)
+///   src/core/tracer.py         (from .event import Event  ← relative import)
+///   src/agent/__init__.py      (empty)
+///   src/agent/base.py          (from src.core.event import Event  ← absolute dotted import)
+fn write_python_fixture(dir: &TempDir) {
+    let src = dir.path().join("src");
+    let core = src.join("core");
+    let agent = src.join("agent");
+    fs::create_dir_all(&core).expect("create src/core/");
+    fs::create_dir_all(&agent).expect("create src/agent/");
+
+    fs::write(src.join("__init__.py"), "").expect("write src/__init__.py");
+    fs::write(core.join("__init__.py"), "").expect("write src/core/__init__.py");
+    fs::write(agent.join("__init__.py"), "").expect("write src/agent/__init__.py");
+
+    fs::write(core.join("event.py"), "class Event:\n    pass\n").expect("write event.py");
+
+    fs::write(
+        core.join("tracer.py"),
+        "from .event import Event\n\nclass Tracer:\n    pass\n",
+    )
+    .expect("write tracer.py");
+
+    fs::write(
+        agent.join("base.py"),
+        "from src.core.event import Event\n\nclass BaseAgent:\n    pass\n",
+    )
+    .expect("write base.py");
+}
+
+// ---------------------------------------------------------------------------
+// AC1 + AC2: Dotted absolute and relative Python imports resolve to file paths
+// ---------------------------------------------------------------------------
+
+/// AC1: `from src.core.event import Event` (absolute dotted) should resolve to
+/// `src/core/event.py` (dots → slashes, append `.py`).
+///
+/// AC2: `from .event import Event` (relative, dot-prefixed) in `src/core/tracer.py`
+/// should resolve relative to `src/core/` → `src/core/event.py`.
+///
+/// Verified by checking that `get_importers("src/core/event.py")` returns both
+/// `src/core/tracer.py` and `src/agent/base.py`.
+#[test]
+fn python_dotted_imports_resolve_to_file_paths() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_python_fixture(&dir);
+
+    api::index(dir.path()).expect("index should succeed");
+
+    let importers = api::get_importers(dir.path(), "src/core/event.py")
+        .expect("get_importers should succeed");
+
+    assert_eq!(
+        importers.len(),
+        2,
+        "both src/core/tracer.py (relative import) and src/agent/base.py (absolute dotted import) \
+         should appear as importers of src/core/event.py; got: {:?}",
+        importers
+    );
+    assert!(
+        importers.iter().any(|p| p.contains("tracer.py")),
+        "src/core/tracer.py must be listed as an importer of event.py \
+         (via relative `from .event import Event`); got: {:?}",
+        importers
+    );
+    assert!(
+        importers.iter().any(|p| p.contains("base.py")),
+        "src/agent/base.py must be listed as an importer of event.py \
+         (via absolute `from src.core.event import Event`); got: {:?}",
+        importers
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AC3: Bare stdlib/external imports do NOT resolve to local file paths
+// ---------------------------------------------------------------------------
+
+/// AC3: `import os` is a bare Python import with no dots mapping to a local
+/// file.  After indexing a file that only contains `import os`, there must be
+/// no edge whose target is `os.py` (or any local variant).
+#[test]
+fn python_bare_stdlib_import_does_not_resolve_to_local_file(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+
+    fs::write(
+        dir.path().join("main.py"),
+        "import os\nimport sys\n\ndef run():\n    print(os.getcwd())\n",
+    )
+    .expect("write main.py");
+
+    api::index(dir.path()).expect("index should succeed");
+
+    // There is no `os.py` in the fixture, so get_importers should return empty.
+    let os_importers = api::get_importers(dir.path(), "os.py")
+        .expect("get_importers should not error for a non-existent file");
+
+    assert!(
+        os_importers.is_empty(),
+        "bare `import os` must not produce a local-file edge to `os.py`; got: {:?}",
+        os_importers
+    );
+
+    // Also verify the graph does not contain a phantom `os.py` node.
+    let graph_result = api::graph(dir.path()).expect("graph should succeed");
+    let has_os_node = graph_result.files.iter().any(|f| f.path == "os.py");
+    assert!(
+        !has_os_node,
+        "`os.py` must not appear as a node in the import graph; got: {:?}",
+        graph_result.files
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// AC4 + AC5: graph() shows non-zero import counts for Python files
+// ---------------------------------------------------------------------------
+
+/// AC4 + AC5: After indexing the multi-file Python fixture, `graph()` must
+/// report `event.py` with `import_count >= 2` (it is imported by both
+/// `tracer.py` and `base.py`).
+#[test]
+fn python_graph_shows_nonzero_import_counts() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_python_fixture(&dir);
+
+    api::index(dir.path()).expect("index should succeed");
+
+    let graph_result = api::graph(dir.path()).expect("graph should succeed");
+
+    let event_entry = graph_result
+        .files
+        .iter()
+        .find(|f| f.path.contains("event.py"));
+
+    assert!(
+        event_entry.is_some(),
+        "src/core/event.py must appear in the graph; got files: {:?}",
+        graph_result.files
+    );
+
+    let event_count = event_entry.unwrap().import_count;
+    assert!(
+        event_count >= 2,
+        "src/core/event.py should have import_count >= 2 (imported by tracer.py and base.py); \
+         got import_count = {}",
+        event_count
+    );
+
+    // Sanity: tracer.py and base.py should have import_count = 0 (nothing imports them).
+    let tracer_entry = graph_result
+        .files
+        .iter()
+        .find(|f| f.path.contains("tracer.py"));
+    let base_entry = graph_result
+        .files
+        .iter()
+        .find(|f| f.path.contains("base.py"));
+
+    if let Some(tracer) = tracer_entry {
+        assert_eq!(
+            tracer.import_count, 0,
+            "tracer.py is not imported by any file in the fixture; got import_count = {}",
+            tracer.import_count
+        );
+    }
+    if let Some(base) = base_entry {
+        assert_eq!(
+            base.import_count, 0,
+            "base.py is not imported by any file in the fixture; got import_count = {}",
+            base.import_count
+        );
+    }
+
+    Ok(())
+}
