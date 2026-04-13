@@ -24,7 +24,7 @@ pub struct IndexerOptions {
 impl Default for IndexerOptions {
     fn default() -> Self {
         Self {
-            max_file_size_bytes: 500 * 1024,
+            max_file_size_bytes: 10 * 1024 * 1024,
             max_file_count: 100000,
             follow_symlinks: false,
             respect_gitignore: true,
@@ -744,7 +744,7 @@ mod tests {
         let dir = setup_workspace();
         let root = dir.path();
 
-        let max_size: u64 = 500 * 1024; // 512_000 bytes — the default limit
+        let max_size: u64 = 500 * 1024; // 512_000 bytes — explicit limit for this test
 
         // File exactly AT the limit — should be indexed (not greater-than, so passes the check)
         let at_limit_path = root.join("at_limit.txt");

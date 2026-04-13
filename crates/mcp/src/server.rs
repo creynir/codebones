@@ -159,7 +159,12 @@ struct MapArgs {
     dir: String,
     #[serde(default = "default_format")]
     format: String,
+    #[serde(default = "default_map_tokens")]
     max_tokens: Option<usize>,
+}
+
+fn default_map_tokens() -> Option<usize> {
+    Some(50_000)
 }
 
 fn default_format() -> String {
@@ -172,7 +177,12 @@ struct GraphArgs {
     dir: String,
     #[serde(default = "default_markdown_format")]
     format: Option<String>,
+    #[serde(default = "default_graph_top")]
     top: Option<usize>,
+}
+
+fn default_graph_top() -> Option<usize> {
+    Some(50)
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -369,10 +379,14 @@ impl CodebonesMcpServer {
         }): Parameters<MapArgs>,
     ) -> Result<Json<MapResponse>, ErrorData> {
         Self::ensure_dir("map", &dir)?;
+        let token_limit = match max_tokens {
+            Some(0) => None,
+            other => other,
+        };
         let content = codebones_core::api::pack(
             Path::new(&dir),
             &format,
-            max_tokens,
+            token_limit,
             codebones_core::api::PackOptions {
                 no_file_summary: false,
                 no_files: true,
@@ -417,11 +431,14 @@ impl CodebonesMcpServer {
             )
         })?;
 
-        if let Some(n) = top {
-            result.files.truncate(n);
+        let unlimited = top == Some(0);
+        if !unlimited {
+            if let Some(n) = top {
+                result.files.truncate(n);
+            }
         }
 
-        let content = format_graph_mcp(&result, format_str, top);
+        let content = format_graph_mcp(&result, format_str, if unlimited { None } else { top });
         Ok(Json(GraphResponse { dir, content }))
     }
 

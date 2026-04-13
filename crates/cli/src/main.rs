@@ -52,9 +52,9 @@ pub enum Commands {
         /// Output format (e.g., xml, markdown)
         #[arg(short, long, default_value = "xml")]
         format: String,
-        /// Maximum tokens allowed in the output
-        #[arg(short, long)]
-        max_tokens: Option<usize>,
+        /// Maximum tokens allowed in the output (0 = unlimited, default = 50000)
+        #[arg(short, long, default_value = "50000")]
+        max_tokens: usize,
         /// Remove all comments from the code
         #[arg(long)]
         remove_comments: bool,
@@ -81,9 +81,9 @@ pub enum Commands {
         /// Output format (markdown, xml, json)
         #[arg(short, long, default_value = "markdown")]
         format: String,
-        /// Show only the top N most-imported files
-        #[arg(long)]
-        top: Option<usize>,
+        /// Show only the top N most-imported files (0 = unlimited, default = 50)
+        #[arg(long, default_value = "50")]
+        top: usize,
         /// Maximum blast radius depth (default: 3)
         #[arg(long, default_value = "3")]
         depth: usize,
@@ -132,7 +132,7 @@ pub enum Commands {
 fn format_graph(
     result: &codebones_core::api::GraphResult,
     format: &str,
-    top: Option<usize>,
+    unlimited: bool,
 ) -> String {
     match format {
         "json" => {
@@ -194,7 +194,7 @@ fn format_graph(
                 ));
             }
             // Only include the import map if we're showing all files (no top filter)
-            if top.is_none() {
+            if unlimited {
                 out.push_str("\n## Import Map\n");
                 for e in &result.edges {
                     out.push_str(&format!("- `{}` → {}\n", e.from, e.to));
@@ -276,13 +276,20 @@ fn main() -> anyhow::Result<()> {
             include,
             ignore,
         } => {
+            // max_tokens == 0 means unlimited full-content pack; any positive value
+            // means skeleton-only output capped at that token budget.
+            let (no_files, token_limit) = if max_tokens == 0 {
+                (false, None)
+            } else {
+                (true, Some(max_tokens))
+            };
             let result = codebones_core::api::pack(
                 &dir,
                 &format,
-                max_tokens,
+                token_limit,
                 codebones_core::api::PackOptions {
                     no_file_summary: false,
-                    no_files: true,
+                    no_files,
                     remove_comments,
                     remove_empty_lines,
                     truncate_base64,
@@ -330,17 +337,18 @@ fn main() -> anyhow::Result<()> {
             depth,
         } => {
             if let Some(file_path) = file {
-                // Blast radius mode
+                // Blast radius mode — top default does not apply
                 let result = codebones_core::api::graph_file(&dir, &file_path, depth)?;
                 let output = format_blast_radius(&file_path, &result.affected_files, &format);
                 println!("{}", output);
             } else {
-                // Full graph mode
+                // Full graph mode — top=0 means unlimited, otherwise truncate
                 let mut graph_result = codebones_core::api::graph(&dir)?;
-                if let Some(n) = top {
-                    graph_result.files.truncate(n);
+                let unlimited = top == 0;
+                if !unlimited {
+                    graph_result.files.truncate(top);
                 }
-                let output = format_graph(&graph_result, &format, top);
+                let output = format_graph(&graph_result, &format, unlimited);
                 println!("{}", output);
             }
         }
