@@ -1,9 +1,9 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use std::fs;
-use tempfile::TempDir;
 #[allow(unused_imports)]
 use serde_json;
+use std::fs;
+use tempfile::TempDir;
 
 // A helper function to create a dummy repository for testing
 fn setup_dummy_repo() -> TempDir {
@@ -563,8 +563,7 @@ fn test_map_include_glob_passthrough() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("dummy.toml")
-                .and(predicate::str::contains("dummy.rs").not()),
+            predicate::str::contains("dummy.toml").and(predicate::str::contains("dummy.rs").not()),
         );
 }
 
@@ -581,8 +580,7 @@ fn test_map_ignore_glob_passthrough() {
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("dummy.rs")
-                .and(predicate::str::contains("dummy.toml").not()),
+            predicate::str::contains("dummy.rs").and(predicate::str::contains("dummy.toml").not()),
         );
 }
 

@@ -202,8 +202,7 @@ pub fn index(dir: &Path) -> Result<()> {
                         .map(|p| p.to_string_lossy().to_string())
                         .unwrap_or_default();
                     for raw_import in doc.imports {
-                        let target_path =
-                            resolve_import(&raw_import, &source_dir, &current_paths);
+                        let target_path = resolve_import(&raw_import, &source_dir, &current_paths);
                         cache.insert_import(file_id, &target_path, &raw_import)?;
                     }
                 }
@@ -569,7 +568,11 @@ pub fn graph(dir: &Path) -> Result<GraphResult> {
         .collect();
 
     // Sort by import_count descending, then by path ascending for stable ordering.
-    files.sort_by(|a, b| b.import_count.cmp(&a.import_count).then(a.path.cmp(&b.path)));
+    files.sort_by(|a, b| {
+        b.import_count
+            .cmp(&a.import_count)
+            .then(a.path.cmp(&b.path))
+    });
 
     let edges: Vec<GraphEdge> = all_edges_raw
         .into_iter()

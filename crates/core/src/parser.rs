@@ -523,10 +523,7 @@ fn walk_for_imports(
             } else {
                 // fallback: get full text minus "use " and ";"
                 let text = node_text(node, src);
-                let trimmed = text
-                    .trim_start_matches("use ")
-                    .trim_end_matches(';')
-                    .trim();
+                let trimmed = text.trim_start_matches("use ").trim_end_matches(';').trim();
                 imports.push(trimmed.to_string());
             }
         } else if kind == "mod_item" {
@@ -602,7 +599,10 @@ fn walk_for_imports(
                 let mut c = node.walk();
                 for child in node.children(&mut c) {
                     let ck = child.kind();
-                    if ck == "qualified_name" || ck == "identifier" || ck == "member_access_expression" {
+                    if ck == "qualified_name"
+                        || ck == "identifier"
+                        || ck == "member_access_expression"
+                    {
                         let text = node_text(child, src);
                         imports.push(text.to_string());
                         break;
@@ -613,7 +613,8 @@ fn walk_for_imports(
     } else if is_ruby {
         if kind == "call" {
             // Check method name
-            let method_text = node.child_by_field_name("method")
+            let method_text = node
+                .child_by_field_name("method")
                 .map(|n| node_text(n, src))
                 .unwrap_or("");
             if method_text == "require" || method_text == "require_relative" {
@@ -646,10 +647,7 @@ fn walk_for_imports(
             let mut c = node.walk();
             for child in node.children(&mut c) {
                 let ck = child.kind();
-                if ck == "namespace_use_clause"
-                    || ck == "qualified_name"
-                    || ck == "name"
-                {
+                if ck == "namespace_use_clause" || ck == "qualified_name" || ck == "name" {
                     let text = node_text(child, src);
                     imports.push(text.to_string());
                     break;
@@ -1193,7 +1191,9 @@ public class Main {}
             doc.imports
         );
         assert!(
-            doc.imports.iter().any(|i| i.contains("com.example.service.UserService")),
+            doc.imports
+                .iter()
+                .any(|i| i.contains("com.example.service.UserService")),
             "should extract import com.example.service.UserService; got: {:?}",
             doc.imports
         );
@@ -1290,9 +1290,11 @@ class Handler {}
         let doc = parse_file(source, &spec);
 
         assert!(
-            doc.imports.iter().any(|i| i.contains("App\\Http\\Controllers\\UserController")
-                || i.contains("App/Http/Controllers/UserController")
-                || i.contains("UserController")),
+            doc.imports
+                .iter()
+                .any(|i| i.contains("App\\Http\\Controllers\\UserController")
+                    || i.contains("App/Http/Controllers/UserController")
+                    || i.contains("UserController")),
             "should extract use App\\Http\\Controllers\\UserController; got: {:?}",
             doc.imports
         );

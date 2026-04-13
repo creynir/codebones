@@ -96,10 +96,7 @@ impl Indexer for DefaultIndexer {
 
             // Skip files inside the .codebones/ directory (database and metadata)
             let rel_path = path.strip_prefix(workspace_root).unwrap_or(path);
-            if rel_path
-                .components()
-                .any(|c| c.as_os_str() == ".codebones")
-            {
+            if rel_path.components().any(|c| c.as_os_str() == ".codebones") {
                 continue;
             }
 

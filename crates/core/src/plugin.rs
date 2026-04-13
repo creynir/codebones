@@ -175,10 +175,9 @@ impl Packer {
             match self.format {
                 OutputFormat::Xml => {
                     let bpe = if self.max_tokens.is_some() {
-                        Some(
-                            tiktoken_rs::cl100k_base()
-                                .map_err(|e| anyhow::anyhow!("Failed to initialize tokenizer: {}", e))?,
-                        )
+                        Some(tiktoken_rs::cl100k_base().map_err(|e| {
+                            anyhow::anyhow!("Failed to initialize tokenizer: {}", e)
+                        })?)
                     } else {
                         None
                     };
@@ -219,10 +218,9 @@ impl Packer {
                 }
                 OutputFormat::Markdown => {
                     let bpe = if self.max_tokens.is_some() {
-                        Some(
-                            tiktoken_rs::cl100k_base()
-                                .map_err(|e| anyhow::anyhow!("Failed to initialize tokenizer: {}", e))?,
-                        )
+                        Some(tiktoken_rs::cl100k_base().map_err(|e| {
+                            anyhow::anyhow!("Failed to initialize tokenizer: {}", e)
+                        })?)
                     } else {
                         None
                     };
@@ -547,7 +545,6 @@ mod tests {
             .expect("failed to write file content");
         (dir, file_path)
     }
-
 
     #[test]
     fn test_plugin_detect_and_enrich() {

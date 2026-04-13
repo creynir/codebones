@@ -33,9 +33,21 @@ async fn mcp_server_exposes_real_tools_over_transport() -> anyhow::Result<()> {
     assert!(tool_names.contains(&"outline"));
     assert!(tool_names.contains(&"get"));
     assert!(tool_names.contains(&"search"));
-    assert!(tool_names.contains(&"map"), "map tool must be registered; got: {:?}", tool_names);
-    assert!(tool_names.contains(&"graph"), "graph tool must be registered; got: {:?}", tool_names);
-    assert!(tool_names.contains(&"graph_file"), "graph_file tool must be registered; got: {:?}", tool_names);
+    assert!(
+        tool_names.contains(&"map"),
+        "map tool must be registered; got: {:?}",
+        tool_names
+    );
+    assert!(
+        tool_names.contains(&"graph"),
+        "graph tool must be registered; got: {:?}",
+        tool_names
+    );
+    assert!(
+        tool_names.contains(&"graph_file"),
+        "graph_file tool must be registered; got: {:?}",
+        tool_names
+    );
 
     let index_result = client
         .call_tool(

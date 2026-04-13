@@ -3,10 +3,10 @@
 /// These tests describe DESIRED behavior. Some currently fail — that is expected and intentional.
 /// They are written TDD-style: tests first, implementation fixes second.
 use codebones_core::api::{self, PackOptions};
-use std::fs;
-use tempfile::TempDir;
 #[allow(unused_imports)]
 use serde_json;
+use std::fs;
+use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
 // Shared fixture helpers
@@ -532,8 +532,8 @@ fn test_index_creates_gitignore_with_dot_codebones_when_git_exists(
 /// AC5: When `.gitignore` already exists but lacks `.codebones/`, `index`
 /// appends the entry.
 #[test]
-fn test_index_appends_dot_codebones_to_existing_gitignore(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_index_appends_dot_codebones_to_existing_gitignore() -> Result<(), Box<dyn std::error::Error>>
+{
     let dir = TempDir::new().expect("failed to create tempdir");
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
@@ -610,8 +610,7 @@ fn test_index_appends_to_claude_md_when_it_exists() -> Result<(), Box<dyn std::e
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
     let claude_md = dir.path().join("CLAUDE.md");
-    fs::write(&claude_md, "# My Project\n\nSome existing content.\n")
-        .expect("write CLAUDE.md");
+    fs::write(&claude_md, "# My Project\n\nSome existing content.\n").expect("write CLAUDE.md");
 
     api::index(dir.path()).expect("index should succeed");
 
@@ -1442,8 +1441,7 @@ fn get_importers_returns_files_that_import_a_given_file() -> Result<(), Box<dyn 
     let dir = TempDir::new().expect("failed to create tempdir");
 
     // shared.ts is imported by both a.ts and b.ts
-    fs::write(dir.path().join("shared.ts"), "export const shared = 1;\n")
-        .expect("write shared.ts");
+    fs::write(dir.path().join("shared.ts"), "export const shared = 1;\n").expect("write shared.ts");
     fs::write(
         dir.path().join("a.ts"),
         "import { shared } from './shared';\nexport const a = shared + 1;\n",
@@ -1499,11 +1497,7 @@ fn write_ts_graph_fixture(dir: &TempDir) {
     let src = dir.path().join("src");
     fs::create_dir_all(&src).expect("create src/");
 
-    fs::write(
-        src.join("db.ts"),
-        "export const db = { connect() {} };\n",
-    )
-    .expect("write db.ts");
+    fs::write(src.join("db.ts"), "export const db = { connect() {} };\n").expect("write db.ts");
 
     fs::write(
         src.join("utils.ts"),
@@ -1524,8 +1518,8 @@ fn write_ts_graph_fixture(dir: &TempDir) {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn graph_returns_files_sorted_by_import_count_descending(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn graph_returns_files_sorted_by_import_count_descending() -> Result<(), Box<dyn std::error::Error>>
+{
     let dir = TempDir::new().expect("failed to create tempdir");
     write_ts_graph_fixture(&dir);
     api::index(dir.path()).expect("index");
@@ -1624,15 +1618,14 @@ fn graph_returns_full_edge_list() -> Result<(), Box<dyn std::error::Error>> {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn graph_file_returns_affected_files_for_direct_importers(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn graph_file_returns_affected_files_for_direct_importers() -> Result<(), Box<dyn std::error::Error>>
+{
     let dir = TempDir::new().expect("failed to create tempdir");
     write_ts_graph_fixture(&dir);
     api::index(dir.path()).expect("index");
 
     // Changing db.ts should affect main.ts and utils.ts (both import it directly).
-    let result =
-        api::graph_file(dir.path(), "src/db.ts", 1).expect("graph_file should succeed");
+    let result = api::graph_file(dir.path(), "src/db.ts", 1).expect("graph_file should succeed");
 
     assert!(
         !result.affected_files.is_empty(),
@@ -1664,8 +1657,7 @@ fn graph_file_blast_radius_follows_reverse_edges() -> Result<(), Box<dyn std::er
 
     // utils.ts imports db.ts. main.ts imports utils.ts.
     // Changing utils.ts should affect main.ts (reverse edge: main -> utils).
-    let result =
-        api::graph_file(dir.path(), "src/utils.ts", 3).expect("graph_file should succeed");
+    let result = api::graph_file(dir.path(), "src/utils.ts", 3).expect("graph_file should succeed");
 
     assert!(
         result.affected_files.iter().any(|f| f.contains("main.ts")),
@@ -1747,15 +1739,13 @@ fn graph_file_respects_max_depth_limit() -> Result<(), Box<dyn std::error::Error
 }
 
 #[test]
-fn graph_file_returns_empty_for_file_with_no_importers(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn graph_file_returns_empty_for_file_with_no_importers() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_ts_graph_fixture(&dir);
     api::index(dir.path()).expect("index");
 
     // main.ts is not imported by anything — blast radius is empty.
-    let result =
-        api::graph_file(dir.path(), "src/main.ts", 3).expect("graph_file should succeed");
+    let result = api::graph_file(dir.path(), "src/main.ts", 3).expect("graph_file should succeed");
 
     assert!(
         result.affected_files.is_empty(),
@@ -1811,8 +1801,8 @@ fn init_creates_claude_settings_json_when_missing() -> Result<(), Box<dyn std::e
     );
 
     let content = fs::read_to_string(&settings_path)?;
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .expect("settings.json must contain valid JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(&content).expect("settings.json must contain valid JSON");
 
     assert!(
         json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
@@ -1831,7 +1821,8 @@ fn init_creates_claude_settings_json_when_missing() -> Result<(), Box<dyn std::e
 /// AC 4: If ~/.claude/settings.json already has other MCP servers configured,
 /// they are preserved after init runs.
 #[test]
-fn init_preserves_existing_mcp_servers_in_claude_settings() -> Result<(), Box<dyn std::error::Error>> {
+fn init_preserves_existing_mcp_servers_in_claude_settings() -> Result<(), Box<dyn std::error::Error>>
+{
     let home = TempDir::new()?;
     let claude_dir = home.path().join(".claude");
     fs::create_dir_all(&claude_dir)?;
@@ -1873,7 +1864,8 @@ fn init_preserves_existing_mcp_servers_in_claude_settings() -> Result<(), Box<dy
 /// AC 5: If codebones-mcp is already registered in ~/.claude/settings.json,
 /// init does not duplicate the entry.
 #[test]
-fn init_does_not_duplicate_codebones_entry_in_claude_settings() -> Result<(), Box<dyn std::error::Error>> {
+fn init_does_not_duplicate_codebones_entry_in_claude_settings(
+) -> Result<(), Box<dyn std::error::Error>> {
     let home = TempDir::new()?;
     let claude_dir = home.path().join(".claude");
     fs::create_dir_all(&claude_dir)?;
@@ -1931,8 +1923,8 @@ fn init_creates_cursor_mcp_json_when_missing() -> Result<(), Box<dyn std::error:
     );
 
     let content = fs::read_to_string(&mcp_path)?;
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .expect("mcp.json must contain valid JSON");
+    let json: serde_json::Value =
+        serde_json::from_str(&content).expect("mcp.json must contain valid JSON");
 
     assert!(
         json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
@@ -1950,7 +1942,8 @@ fn init_creates_cursor_mcp_json_when_missing() -> Result<(), Box<dyn std::error:
 
 /// AC 7: Existing MCP servers in ~/.cursor/mcp.json are preserved when init runs.
 #[test]
-fn init_preserves_existing_mcp_servers_in_cursor_config() -> Result<(), Box<dyn std::error::Error>> {
+fn init_preserves_existing_mcp_servers_in_cursor_config() -> Result<(), Box<dyn std::error::Error>>
+{
     let home = TempDir::new()?;
     let cursor_dir = home.path().join(".cursor");
     fs::create_dir_all(&cursor_dir)?;
@@ -2072,8 +2065,8 @@ fn python_dotted_imports_resolve_to_file_paths() -> Result<(), Box<dyn std::erro
 
     api::index(dir.path()).expect("index should succeed");
 
-    let importers = api::get_importers(dir.path(), "src/core/event.py")
-        .expect("get_importers should succeed");
+    let importers =
+        api::get_importers(dir.path(), "src/core/event.py").expect("get_importers should succeed");
 
     assert_eq!(
         importers.len(),
@@ -2717,9 +2710,7 @@ fn index_writes_last_commit_file_in_git_repo() -> Result<(), Box<dyn std::error:
         ".codebones/last_commit must exist after index() on a git repo"
     );
 
-    let stored = fs::read_to_string(&last_commit_path)?
-        .trim()
-        .to_string();
+    let stored = fs::read_to_string(&last_commit_path)?.trim().to_string();
     let head = git_head(dir.path());
 
     assert_eq!(
@@ -2762,11 +2753,9 @@ fn ensure_fresh_skips_indexing_when_git_is_clean_and_head_unchanged(
     api::index(dir.path())?;
 
     let head_before = git_head(dir.path());
-    let last_commit_before = fs::read_to_string(
-        dir.path().join(".codebones").join("last_commit"),
-    )?
-    .trim()
-    .to_string();
+    let last_commit_before = fs::read_to_string(dir.path().join(".codebones").join("last_commit"))?
+        .trim()
+        .to_string();
     assert_eq!(
         last_commit_before, head_before,
         "pre-condition: last_commit must equal HEAD before the skip test"
@@ -2782,11 +2771,9 @@ fn ensure_fresh_skips_indexing_when_git_is_clean_and_head_unchanged(
     );
 
     // The last_commit file must still match HEAD (no rewrite from a spurious re-index).
-    let last_commit_after = fs::read_to_string(
-        dir.path().join(".codebones").join("last_commit"),
-    )?
-    .trim()
-    .to_string();
+    let last_commit_after = fs::read_to_string(dir.path().join(".codebones").join("last_commit"))?
+        .trim()
+        .to_string();
     assert_eq!(
         last_commit_after, head_before,
         "last_commit must remain equal to HEAD after a clean-repo skip; \
@@ -2846,7 +2833,13 @@ fn ensure_fresh_reindexes_when_head_changes() -> Result<(), Box<dyn std::error::
         .output()
         .unwrap();
     StdCommand::new("git")
-        .args(["-c", "commit.gpgsign=false", "commit", "-m", "second commit"])
+        .args([
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "second commit",
+        ])
         .current_dir(dir.path())
         .output()
         .unwrap();

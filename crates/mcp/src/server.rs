@@ -405,16 +405,15 @@ impl CodebonesMcpServer {
     ) -> Result<Json<GraphResponse>, ErrorData> {
         Self::ensure_dir("graph", &dir)?;
         let format_str = format.as_deref().unwrap_or("markdown");
-        let mut result =
-            codebones_core::api::graph(Path::new(&dir)).map_err(|error| {
-                ErrorData::internal_error(
-                    format!("graph failed: {}", error),
-                    Some(rmcp::serde_json::json!({
-                        "tool": "graph",
-                        "dir": dir,
-                    })),
-                )
-            })?;
+        let mut result = codebones_core::api::graph(Path::new(&dir)).map_err(|error| {
+            ErrorData::internal_error(
+                format!("graph failed: {}", error),
+                Some(rmcp::serde_json::json!({
+                    "tool": "graph",
+                    "dir": dir,
+                })),
+            )
+        })?;
 
         if let Some(n) = top {
             result.files.truncate(n);
@@ -434,19 +433,18 @@ impl CodebonesMcpServer {
     ) -> Result<Json<GraphFileResponse>, ErrorData> {
         Self::ensure_dir("graph_file", &dir)?;
         let max_depth = depth.unwrap_or(3);
-        let result =
-            codebones_core::api::graph_file(Path::new(&dir), &file, max_depth).map_err(
-                |error| {
-                    ErrorData::internal_error(
-                        format!("graph_file failed: {}", error),
-                        Some(rmcp::serde_json::json!({
-                            "tool": "graph_file",
-                            "dir": dir,
-                            "file": file,
-                        })),
-                    )
-                },
-            )?;
+        let result = codebones_core::api::graph_file(Path::new(&dir), &file, max_depth).map_err(
+            |error| {
+                ErrorData::internal_error(
+                    format!("graph_file failed: {}", error),
+                    Some(rmcp::serde_json::json!({
+                        "tool": "graph_file",
+                        "dir": dir,
+                        "file": file,
+                    })),
+                )
+            },
+        )?;
 
         let content = format_blast_radius_mcp(&file, &result.affected_files);
         Ok(Json(GraphFileResponse { dir, file, content }))

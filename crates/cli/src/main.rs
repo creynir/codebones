@@ -227,7 +227,11 @@ fn format_blast_radius(file_path: &str, affected: &[String], format: &str) -> St
         }
         _ => {
             // markdown (default)
-            let mut out = format!("# Blast Radius: {}\n\n## Affected Files ({})\n", file_path, affected.len());
+            let mut out = format!(
+                "# Blast Radius: {}\n\n## Affected Files ({})\n",
+                file_path,
+                affected.len()
+            );
             for f in affected {
                 out.push_str(&format!("- {}\n", f));
             }
@@ -252,9 +256,8 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Init { home } => {
-            let home_dir = home.unwrap_or_else(|| {
-                dirs::home_dir().expect("Could not determine home directory")
-            });
+            let home_dir = home
+                .unwrap_or_else(|| dirs::home_dir().expect("Could not determine home directory"));
             let messages = codebones_core::api::init(&home_dir)?;
             for msg in messages {
                 println!("{}", msg);

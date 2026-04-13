@@ -875,7 +875,11 @@ mod tests {
         cache.init().unwrap();
 
         cache
-            .upsert_file("src/standalone.rs", "hash_standalone", b"fn standalone() {}")
+            .upsert_file(
+                "src/standalone.rs",
+                "hash_standalone",
+                b"fn standalone() {}",
+            )
             .unwrap();
 
         let imports = cache.get_imports("src/standalone.rs").unwrap();
