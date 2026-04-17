@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use std::fs;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 // A helper function to create a dummy repository for testing
@@ -693,10 +694,10 @@ fn test_index_removes_legacy_root_db() {
     );
 }
 
-/// AC5 + AC6: When `.git/` exists and `.gitignore` is absent, `index`
-/// creates `.gitignore` containing `.codebones/`.
+/// FND-1 AC6/AC1: In a git repository with no `.gitignore`, `codebones index .`
+/// must not create `.gitignore`; it only creates `.codebones/codebones.db`.
 #[test]
-fn test_index_creates_gitignore_in_git_repo() {
+fn test_index_does_not_create_gitignore_in_git_repo() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
@@ -715,25 +716,26 @@ fn test_index_creates_gitignore_in_git_repo() {
 
     let gitignore_path = root.join(".gitignore");
     assert!(
-        gitignore_path.exists(),
-        ".gitignore must be created when .git/ exists"
+        !gitignore_path.exists(),
+        ".gitignore must not be created by 'codebones index'"
     );
-    let contents = fs::read_to_string(&gitignore_path).expect("read .gitignore");
     assert!(
-        contents.contains(".codebones/"),
-        ".gitignore must contain '.codebones/' entry; got: {contents}"
+        root.join(".codebones").join("codebones.db").exists(),
+        ".codebones/codebones.db must still be created by 'codebones index'"
     );
 }
 
-/// AC5: When `.gitignore` already exists but lacks `.codebones/`, `index`
-/// appends the entry without destroying existing content.
+/// FND-1 AC6/AC2: Existing `.gitignore` contents must be exactly unchanged by
+/// `codebones index .`.
 #[test]
-fn test_index_appends_dot_codebones_to_existing_gitignore() {
+fn test_index_preserves_existing_gitignore_exactly() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
     fs::create_dir(root.join(".git")).expect("create .git dir");
-    fs::write(root.join(".gitignore"), "target/\n*.log\n").expect("write .gitignore");
+    let gitignore_path = root.join(".gitignore");
+    let original = "target/\n*.log\n";
+    fs::write(&gitignore_path, original).expect("write .gitignore");
 
     Command::cargo_bin("codebones")
         .unwrap()
@@ -742,26 +744,24 @@ fn test_index_appends_dot_codebones_to_existing_gitignore() {
         .assert()
         .success();
 
-    let contents = fs::read_to_string(root.join(".gitignore")).expect("read .gitignore");
-    assert!(
-        contents.contains(".codebones/"),
-        ".gitignore must contain '.codebones/' after index; got: {contents}"
-    );
-    assert!(
-        contents.contains("target/"),
-        "original .gitignore content must be preserved; got: {contents}"
+    let contents = fs::read_to_string(&gitignore_path).expect("read .gitignore");
+    assert_eq!(
+        contents, original,
+        ".gitignore contents must be exactly unchanged by 'codebones index'"
     );
 }
 
-/// AC7: When `.gitignore` already contains `.codebones/`, `index` does NOT
-/// add a duplicate entry.
+/// FND-1 AC6/AC2: Existing `.gitignore` contents remain exactly unchanged even
+/// when they already mention `.codebones/`.
 #[test]
-fn test_index_no_duplicate_gitignore_entry() {
+fn test_index_preserves_existing_gitignore_with_codebones_entry_exactly() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
     fs::create_dir(root.join(".git")).expect("create .git dir");
-    fs::write(root.join(".gitignore"), ".codebones/\ntarget/\n").expect("write .gitignore");
+    let gitignore_path = root.join(".gitignore");
+    let original = ".codebones/\ntarget/\n";
+    fs::write(&gitignore_path, original).expect("write .gitignore");
 
     // Run twice to stress idempotency.
     Command::cargo_bin("codebones")
@@ -777,11 +777,10 @@ fn test_index_no_duplicate_gitignore_entry() {
         .assert()
         .success();
 
-    let contents = fs::read_to_string(root.join(".gitignore")).expect("read .gitignore");
-    let occurrences = contents.matches(".codebones/").count();
+    let contents = fs::read_to_string(&gitignore_path).expect("read .gitignore");
     assert_eq!(
-        occurrences, 1,
-        ".codebones/ must appear exactly once in .gitignore; got {occurrences}"
+        contents, original,
+        ".gitignore contents must be exactly unchanged by repeated 'codebones index' runs"
     );
 }
 
@@ -810,15 +809,16 @@ fn test_index_does_not_create_gitignore_without_git_dir() {
     );
 }
 
-/// AC9: When `CLAUDE.md` exists, `index` appends a codebones section on
-/// first run.
+/// FND-1 AC6/AC3: Existing `CLAUDE.md` contents must be exactly unchanged by
+/// `codebones index .`.
 #[test]
-fn test_index_appends_to_claude_md() {
+fn test_index_preserves_existing_claude_md_exactly() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
     let claude_md = root.join("CLAUDE.md");
-    fs::write(&claude_md, "# My Project\n\nExisting content.\n").expect("write CLAUDE.md");
+    let original = "# My Project\n\nExisting content.\n";
+    fs::write(&claude_md, original).expect("write CLAUDE.md");
 
     Command::cargo_bin("codebones")
         .unwrap()
@@ -828,24 +828,22 @@ fn test_index_appends_to_claude_md() {
         .success();
 
     let contents = fs::read_to_string(&claude_md).expect("read CLAUDE.md");
-    assert!(
-        contents.contains("codebones"),
-        "CLAUDE.md must contain a codebones section after index; got: {contents}"
-    );
-    assert!(
-        contents.contains("My Project"),
-        "original CLAUDE.md content must be preserved; got: {contents}"
+    assert_eq!(
+        contents, original,
+        "CLAUDE.md contents must be exactly unchanged by 'codebones index'"
     );
 }
 
-/// AC9 (idempotency): `index` does NOT append a duplicate codebones section
-/// to `CLAUDE.md` on repeated runs.
+/// FND-1 AC6/AC3: Existing `CLAUDE.md` contents remain exactly unchanged on
+/// repeated `codebones index .` runs, including files that already mention codebones.
 #[test]
-fn test_index_no_duplicate_claude_md_section() {
+fn test_index_preserves_existing_claude_md_with_codebones_text_exactly() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
-    fs::write(root.join("CLAUDE.md"), "# My Project\n").expect("write CLAUDE.md");
+    let claude_md = root.join("CLAUDE.md");
+    let original = "# My Project\n\nExisting codebones notes.\n";
+    fs::write(&claude_md, original).expect("write CLAUDE.md");
 
     Command::cargo_bin("codebones")
         .unwrap()
@@ -860,25 +858,23 @@ fn test_index_no_duplicate_claude_md_section() {
         .assert()
         .success();
 
-    let contents = fs::read_to_string(root.join("CLAUDE.md")).expect("read CLAUDE.md");
-    let section_starts = contents.matches("## codebones").count()
-        + contents.matches("## Codebones").count()
-        + contents.matches("<!-- codebones -->").count();
-    assert!(
-        section_starts <= 1,
-        "codebones section must appear at most once in CLAUDE.md; found {section_starts} times"
+    let contents = fs::read_to_string(&claude_md).expect("read CLAUDE.md");
+    assert_eq!(
+        contents, original,
+        "CLAUDE.md contents must be exactly unchanged by repeated 'codebones index' runs"
     );
 }
 
-/// AC10: When `AGENTS.md` exists, `index` appends a codebones section on
-/// first run.
+/// FND-1 AC6/AC4: Existing `AGENTS.md` contents must be exactly unchanged by
+/// `codebones index .`.
 #[test]
-fn test_index_appends_to_agents_md() {
+fn test_index_preserves_existing_agents_md_exactly() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
     let agents_md = root.join("AGENTS.md");
-    fs::write(&agents_md, "# Agents\n\nExisting content.\n").expect("write AGENTS.md");
+    let original = "# Agents\n\nExisting content.\n";
+    fs::write(&agents_md, original).expect("write AGENTS.md");
 
     Command::cargo_bin("codebones")
         .unwrap()
@@ -888,24 +884,22 @@ fn test_index_appends_to_agents_md() {
         .success();
 
     let contents = fs::read_to_string(&agents_md).expect("read AGENTS.md");
-    assert!(
-        contents.contains("codebones"),
-        "AGENTS.md must contain a codebones section after index; got: {contents}"
-    );
-    assert!(
-        contents.contains("Agents"),
-        "original AGENTS.md content must be preserved; got: {contents}"
+    assert_eq!(
+        contents, original,
+        "AGENTS.md contents must be exactly unchanged by 'codebones index'"
     );
 }
 
-/// AC10 (idempotency): `index` does NOT duplicate the codebones section in
-/// `AGENTS.md` on repeated runs.
+/// FND-1 AC6/AC4: Existing `AGENTS.md` contents remain exactly unchanged on
+/// repeated `codebones index .` runs, including files that already mention codebones.
 #[test]
-fn test_index_no_duplicate_agents_md_section() {
+fn test_index_preserves_existing_agents_md_with_codebones_text_exactly() {
     let temp = setup_dummy_repo();
     let root = temp.path();
 
-    fs::write(root.join("AGENTS.md"), "# Agents\n").expect("write AGENTS.md");
+    let agents_md = root.join("AGENTS.md");
+    let original = "# Agents\n\nExisting codebones notes.\n";
+    fs::write(&agents_md, original).expect("write AGENTS.md");
 
     Command::cargo_bin("codebones")
         .unwrap()
@@ -920,13 +914,10 @@ fn test_index_no_duplicate_agents_md_section() {
         .assert()
         .success();
 
-    let contents = fs::read_to_string(root.join("AGENTS.md")).expect("read AGENTS.md");
-    let section_starts = contents.matches("## codebones").count()
-        + contents.matches("## Codebones").count()
-        + contents.matches("<!-- codebones -->").count();
-    assert!(
-        section_starts <= 1,
-        "codebones section must appear at most once in AGENTS.md; found {section_starts} times"
+    let contents = fs::read_to_string(&agents_md).expect("read AGENTS.md");
+    assert_eq!(
+        contents, original,
+        "AGENTS.md contents must be exactly unchanged by repeated 'codebones index' runs"
     );
 }
 
@@ -1268,112 +1259,334 @@ fn test_graph_file_depth_flag_limits_blast_radius() {
 }
 
 // ---------------------------------------------------------------------------
-// init command — AC 8
+// init command
 // ---------------------------------------------------------------------------
 
-/// AC 8 (claude detected): `codebones init --home <dir>` reports that Claude
-/// Code was detected and configured.
-#[test]
-fn init_reports_claude_code_detected_and_configured() {
-    let home = TempDir::new().unwrap();
-    fs::create_dir_all(home.path().join(".claude")).unwrap();
+fn canonical_skill_path(home_dir: &Path) -> PathBuf {
+    home_dir
+        .join(".codebones")
+        .join("skills")
+        .join("codebones")
+        .join("SKILL.md")
+}
 
-    let output = Command::cargo_bin("codebones")
-        .unwrap()
-        .args(["init", "--home", home.path().to_str().unwrap()])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
+fn codex_global_skill_path(home_dir: &Path) -> PathBuf {
+    home_dir
+        .join(".agents")
+        .join("skills")
+        .join("codebones")
+        .join("SKILL.md")
+}
 
-    let stdout = String::from_utf8_lossy(&output);
+fn claude_global_skill_path(home_dir: &Path) -> PathBuf {
+    home_dir
+        .join(".claude")
+        .join("skills")
+        .join("codebones")
+        .join("SKILL.md")
+}
+
+fn claude_mcp_config_path(home_dir: &Path) -> PathBuf {
+    home_dir.join(".claude").join("settings.json")
+}
+
+fn cursor_mcp_config_path(home_dir: &Path) -> PathBuf {
+    home_dir.join(".cursor").join("mcp.json")
+}
+
+fn assert_default_skills_exist(home_dir: &Path) {
     assert!(
-        stdout.to_lowercase().contains("claude"),
-        "`codebones init` must mention Claude Code in output when detected; got: {}",
-        stdout
+        canonical_skill_path(home_dir).exists(),
+        "canonical codebones skill should exist"
+    );
+    assert!(
+        codex_global_skill_path(home_dir).exists(),
+        "Codex global codebones skill should exist"
     );
 }
 
-/// AC 8 (cursor detected): `codebones init --home <dir>` reports that Cursor
-/// was detected and configured.
+fn assert_no_skill_files(home_dir: &Path) {
+    assert!(
+        !canonical_skill_path(home_dir).exists(),
+        "canonical codebones skill should not exist"
+    );
+    assert!(
+        !codex_global_skill_path(home_dir).exists(),
+        "Codex global codebones skill should not exist"
+    );
+    assert!(
+        !claude_global_skill_path(home_dir).exists(),
+        "Claude global codebones skill should not exist"
+    );
+}
+
+fn assert_no_mcp_configs(home_dir: &Path) {
+    assert!(
+        !claude_mcp_config_path(home_dir).exists(),
+        "Claude MCP settings should not exist"
+    );
+    assert!(
+        !cursor_mcp_config_path(home_dir).exists(),
+        "Cursor MCP config should not exist"
+    );
+}
+
+fn read_json_file(path: &Path) -> serde_json::Value {
+    let content = fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("{} should be readable: {error}", path.display()));
+    serde_json::from_str(&content)
+        .unwrap_or_else(|error| panic!("{} should contain valid JSON: {error}", path.display()))
+}
+
+fn combined_output(output: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
 #[test]
-fn init_reports_cursor_detected_and_configured() {
+fn init_yes_creates_default_skills_without_silent_mcp_configs() {
     let home = TempDir::new().unwrap();
     fs::create_dir_all(home.path().join(".cursor")).unwrap();
 
-    let output = Command::cargo_bin("codebones")
+    Command::cargo_bin("codebones")
         .unwrap()
-        .args(["init", "--home", home.path().to_str().unwrap()])
+        .args(["init", "--home", home.path().to_str().unwrap(), "--yes"])
         .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
+        .success();
 
-    let stdout = String::from_utf8_lossy(&output);
+    assert_default_skills_exist(home.path());
     assert!(
-        stdout.to_lowercase().contains("cursor"),
-        "`codebones init` must mention Cursor in output when detected; got: {}",
-        stdout
+        !claude_global_skill_path(home.path()).exists(),
+        "Claude global skill should only be installed by default when .claude exists"
     );
+    assert_no_mcp_configs(home.path());
 }
 
-/// AC 8 (both detected): When both ~/.claude/ and ~/.cursor/ exist, the output
-/// mentions both tools.
 #[test]
-fn init_reports_both_tools_when_both_detected() {
+fn init_yes_installs_claude_global_skill_when_claude_dir_exists() {
     let home = TempDir::new().unwrap();
     fs::create_dir_all(home.path().join(".claude")).unwrap();
-    fs::create_dir_all(home.path().join(".cursor")).unwrap();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .args(["init", "--home", home.path().to_str().unwrap(), "--yes"])
+        .assert()
+        .success();
+
+    assert_default_skills_exist(home.path());
+    assert!(
+        claude_global_skill_path(home.path()).exists(),
+        "Claude global codebones skill should be installed when .claude exists"
+    );
+    assert_no_mcp_configs(home.path());
+}
+
+#[test]
+fn init_yes_with_explicit_claude_skill_target_skips_default_codex_skill() {
+    let home = TempDir::new().unwrap();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .args([
+            "init",
+            "--home",
+            home.path().to_str().unwrap(),
+            "--yes",
+            "--skill-target",
+            "claude-global",
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        canonical_skill_path(home.path()).exists(),
+        "canonical codebones skill should exist"
+    );
+    assert!(
+        claude_global_skill_path(home.path()).exists(),
+        "Claude global codebones skill should exist"
+    );
+    assert!(
+        !codex_global_skill_path(home.path()).exists(),
+        "explicit skill target should override default Codex global skill"
+    );
+    assert_no_mcp_configs(home.path());
+}
+
+#[test]
+fn init_dry_run_reports_planned_work_and_creates_no_files() {
+    let home = TempDir::new().unwrap();
 
     let output = Command::cargo_bin("codebones")
         .unwrap()
-        .args(["init", "--home", home.path().to_str().unwrap()])
+        .args(["init", "--home", home.path().to_str().unwrap(), "--dry-run"])
         .assert()
         .success()
         .get_output()
-        .stdout
         .clone();
 
-    let stdout = String::from_utf8_lossy(&output);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
     assert!(
-        stdout.to_lowercase().contains("claude"),
-        "output must mention Claude Code; got: {}",
-        stdout
+        stdout.contains("dry-run") || stdout.contains("would create"),
+        "dry-run output should mention dry-run or would-create behavior; got: {}",
+        String::from_utf8_lossy(&output.stdout)
     );
+    assert_no_skill_files(home.path());
+    assert_no_mcp_configs(home.path());
+}
+
+#[test]
+fn init_cursor_mcp_target_creates_only_cursor_mcp_config() {
+    let home = TempDir::new().unwrap();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .args([
+            "init",
+            "--home",
+            home.path().to_str().unwrap(),
+            "--mcp-target",
+            "cursor-global",
+        ])
+        .assert()
+        .success();
+
+    let cursor_json = read_json_file(&cursor_mcp_config_path(home.path()));
+    assert_eq!(
+        cursor_json["mcpServers"]["codebones"]["command"],
+        "codebones-mcp"
+    );
+    assert_no_skill_files(home.path());
     assert!(
-        stdout.to_lowercase().contains("cursor"),
-        "output must mention Cursor; got: {}",
-        stdout
+        !claude_mcp_config_path(home.path()).exists(),
+        "Claude MCP settings should not be created for cursor-global target"
     );
 }
 
-/// AC 8 + AC 9 (none detected): When no tools are found, init exits
-/// successfully and its output indicates no tools were found.
 #[test]
-fn init_reports_no_tools_found_when_none_detected() {
+fn init_yes_with_claude_mcp_target_creates_default_skills_and_claude_mcp_config() {
     let home = TempDir::new().unwrap();
-    // Neither .claude nor .cursor is created
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .args([
+            "init",
+            "--home",
+            home.path().to_str().unwrap(),
+            "--yes",
+            "--mcp-target",
+            "claude-global",
+        ])
+        .assert()
+        .success();
+
+    assert_default_skills_exist(home.path());
+    let claude_json = read_json_file(&claude_mcp_config_path(home.path()));
+    assert_eq!(
+        claude_json["mcpServers"]["codebones"]["command"],
+        "codebones-mcp"
+    );
+    assert!(
+        !cursor_mcp_config_path(home.path()).exists(),
+        "Cursor MCP config should not be created for claude-global target"
+    );
+}
+
+#[test]
+fn init_claude_skill_target_symlink_links_to_canonical_skill() {
+    let home = TempDir::new().unwrap();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .args([
+            "init",
+            "--home",
+            home.path().to_str().unwrap(),
+            "--skill-target",
+            "claude-global",
+            "--skill-method",
+            "symlink",
+        ])
+        .assert()
+        .success();
+
+    let target = claude_global_skill_path(home.path());
+    let metadata = fs::symlink_metadata(&target)
+        .unwrap_or_else(|error| panic!("{} should exist: {error}", target.display()));
+    assert!(
+        metadata.file_type().is_symlink(),
+        "{} should be a symlink",
+        target.display()
+    );
+    assert_eq!(
+        fs::canonicalize(&target).expect("target symlink should resolve"),
+        fs::canonicalize(canonical_skill_path(home.path()))
+            .expect("canonical skill should resolve")
+    );
+    assert!(
+        !codex_global_skill_path(home.path()).exists(),
+        "explicit skill target without --yes should not install default Codex skill"
+    );
+    assert_no_mcp_configs(home.path());
+}
+
+#[test]
+fn init_rejects_mcp_target_with_no_mcp() {
+    let home = TempDir::new().unwrap();
+
+    let output = Command::cargo_bin("codebones")
+        .unwrap()
+        .args([
+            "init",
+            "--home",
+            home.path().to_str().unwrap(),
+            "--mcp-target",
+            "claude-global",
+            "--no-mcp",
+        ])
+        .output()
+        .expect("init command should run");
+
+    assert!(
+        !output.status.success(),
+        "conflicting MCP flags should fail"
+    );
+    assert!(
+        combined_output(&output).to_lowercase().contains("conflict"),
+        "conflicting MCP flags should mention the conflict; got: {}",
+        combined_output(&output)
+    );
+}
+
+#[test]
+fn init_plain_non_interactive_requires_confirmation_or_explicit_targets() {
+    let home = TempDir::new().unwrap();
 
     let output = Command::cargo_bin("codebones")
         .unwrap()
         .args(["init", "--home", home.path().to_str().unwrap()])
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
+        .output()
+        .expect("init command should run");
 
-    let stdout = String::from_utf8_lossy(&output);
-    // Output should indicate nothing was found — accept any phrasing that
-    // conveys "no tools" / "none" / "not found" / "no supported".
-    let lower = stdout.to_lowercase();
     assert!(
-        lower.contains("no") || lower.contains("none") || lower.contains("not found"),
-        "`codebones init` must report that no tools were found; got: {}",
-        stdout
+        !output.status.success(),
+        "plain non-interactive init should fail"
     );
+
+    let combined = combined_output(&output).to_lowercase();
+    assert!(
+        combined.contains("non-interactive")
+            && combined.contains("--yes")
+            && combined.contains("--dry-run")
+            && combined.contains("target"),
+        "non-interactive failure should mention --yes, --dry-run, or explicit targets; got: {}",
+        combined_output(&output)
+    );
+    assert_no_skill_files(home.path());
+    assert_no_mcp_configs(home.path());
 }
 
 // ===========================================================================

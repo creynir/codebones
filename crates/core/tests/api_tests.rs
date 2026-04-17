@@ -4,6 +4,7 @@
 /// They are written TDD-style: tests first, implementation fixes second.
 use codebones_core::api::{self, PackOptions};
 use std::fs;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -496,11 +497,11 @@ fn test_index_deletes_legacy_root_db_and_creates_new_in_dot_codebones(
     Ok(())
 }
 
-/// AC5 + AC6: When `.git/` exists and `.gitignore` does not, `index` creates
-/// `.gitignore` containing `.codebones/`.
+/// FND-1 AC1: In a git repository with no `.gitignore`, `index` must not
+/// create `.gitignore`; it only creates `.codebones/codebones.db`.
 #[test]
-fn test_index_creates_gitignore_with_dot_codebones_when_git_exists(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_index_does_not_create_gitignore_when_git_exists() -> Result<(), Box<dyn std::error::Error>>
+{
     let dir = TempDir::new().expect("failed to create tempdir");
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
@@ -517,64 +518,59 @@ fn test_index_creates_gitignore_with_dot_codebones_when_git_exists(
 
     let gitignore_path = dir.path().join(".gitignore");
     assert!(
-        gitignore_path.exists(),
-        ".gitignore must be created when .git/ exists"
+        !gitignore_path.exists(),
+        ".gitignore must not be created by index"
     );
-    let contents = fs::read_to_string(&gitignore_path)?;
     assert!(
-        contents.contains(".codebones/"),
-        ".gitignore must contain '.codebones/' entry; got: {contents}"
+        dir.path().join(".codebones").join("codebones.db").exists(),
+        ".codebones/codebones.db must still be created by index"
     );
     Ok(())
 }
 
-/// AC5: When `.gitignore` already exists but lacks `.codebones/`, `index`
-/// appends the entry.
+/// FND-1 AC2: Existing `.gitignore` contents must be exactly unchanged by
+/// `index`.
 #[test]
-fn test_index_appends_dot_codebones_to_existing_gitignore() -> Result<(), Box<dyn std::error::Error>>
-{
+fn test_index_preserves_existing_gitignore_exactly() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
     fs::create_dir(dir.path().join(".git")).expect("create .git dir");
-    fs::write(dir.path().join(".gitignore"), "target/\n*.log\n")
-        .expect("write existing .gitignore");
+    let gitignore_path = dir.path().join(".gitignore");
+    let original = "target/\n*.log\n";
+    fs::write(&gitignore_path, original).expect("write existing .gitignore");
 
     api::index(dir.path()).expect("index should succeed");
 
-    let contents = fs::read_to_string(dir.path().join(".gitignore"))?;
-    assert!(
-        contents.contains(".codebones/"),
-        ".gitignore must contain '.codebones/' after index; got: {contents}"
-    );
-    // Original content must still be present.
-    assert!(
-        contents.contains("target/"),
-        "original .gitignore content must be preserved; got: {contents}"
+    let contents = fs::read_to_string(&gitignore_path)?;
+    assert_eq!(
+        contents, original,
+        ".gitignore contents must be exactly unchanged by index"
     );
     Ok(())
 }
 
-/// AC7: When `.gitignore` already contains `.codebones/`, `index` does NOT
-/// add a duplicate entry.
+/// FND-1 AC2: Existing `.gitignore` contents remain exactly unchanged even
+/// when they already mention `.codebones/`.
 #[test]
-fn test_index_does_not_duplicate_gitignore_entry() -> Result<(), Box<dyn std::error::Error>> {
+fn test_index_preserves_existing_gitignore_with_codebones_entry_exactly(
+) -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
     fs::create_dir(dir.path().join(".git")).expect("create .git dir");
-    fs::write(dir.path().join(".gitignore"), ".codebones/\ntarget/\n")
-        .expect("write .gitignore with existing entry");
+    let gitignore_path = dir.path().join(".gitignore");
+    let original = ".codebones/\ntarget/\n";
+    fs::write(&gitignore_path, original).expect("write .gitignore with existing entry");
 
     // Run index twice to stress-test idempotency.
     api::index(dir.path()).expect("first index");
     api::index(dir.path()).expect("second index");
 
-    let contents = fs::read_to_string(dir.path().join(".gitignore"))?;
-    let occurrences = contents.matches(".codebones/").count();
+    let contents = fs::read_to_string(&gitignore_path)?;
     assert_eq!(
-        occurrences, 1,
-        ".codebones/ must appear exactly once in .gitignore; got {occurrences} occurrences"
+        contents, original,
+        ".gitignore contents must be exactly unchanged by repeated index runs"
     );
     Ok(())
 }
@@ -601,107 +597,90 @@ fn test_index_does_not_touch_gitignore_without_git_dir() -> Result<(), Box<dyn s
     Ok(())
 }
 
-/// AC9: When `CLAUDE.md` exists, `index` appends a codebones section on first
-/// run.
+/// FND-1 AC3: Existing `CLAUDE.md` contents must be exactly unchanged by
+/// `index`.
 #[test]
-fn test_index_appends_to_claude_md_when_it_exists() -> Result<(), Box<dyn std::error::Error>> {
+fn test_index_preserves_existing_claude_md_exactly() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
     let claude_md = dir.path().join("CLAUDE.md");
-    fs::write(&claude_md, "# My Project\n\nSome existing content.\n").expect("write CLAUDE.md");
+    let original = "# My Project\n\nSome existing content.\n";
+    fs::write(&claude_md, original).expect("write CLAUDE.md");
 
     api::index(dir.path()).expect("index should succeed");
 
     let contents = fs::read_to_string(&claude_md)?;
-    assert!(
-        contents.contains("codebones"),
-        "CLAUDE.md must contain a codebones section after index; got: {contents}"
-    );
-    // Original content must still be present.
-    assert!(
-        contents.contains("My Project"),
-        "original CLAUDE.md content must be preserved; got: {contents}"
+    assert_eq!(
+        contents, original,
+        "CLAUDE.md contents must be exactly unchanged by index"
     );
     Ok(())
 }
 
-/// AC9 (idempotency): `index` does NOT append a duplicate codebones section
-/// to `CLAUDE.md` on repeated runs.
+/// FND-1 AC3: Existing `CLAUDE.md` contents remain exactly unchanged on
+/// repeated `index` runs, including files that already mention codebones.
 #[test]
-fn test_index_does_not_duplicate_claude_md_section() -> Result<(), Box<dyn std::error::Error>> {
+fn test_index_preserves_existing_claude_md_with_codebones_text_exactly(
+) -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
     let claude_md = dir.path().join("CLAUDE.md");
-    fs::write(&claude_md, "# My Project\n").expect("write CLAUDE.md");
+    let original = "# My Project\n\nExisting codebones notes.\n";
+    fs::write(&claude_md, original).expect("write CLAUDE.md");
 
     api::index(dir.path()).expect("first index");
     api::index(dir.path()).expect("second index");
 
     let contents = fs::read_to_string(&claude_md)?;
-    // Count how many times the codebones marker appears.
-    let marker_count = contents.matches("codebones").count();
-    assert!(
-        marker_count >= 1,
-        "codebones section must be present after index; got: {contents}"
-    );
-    // A naive implementation would double-append; verify the section is not duplicated.
-    // We check there is at most one codebones header block.
-    let section_starts = contents.matches("## codebones").count()
-        + contents.matches("## Codebones").count()
-        + contents.matches("<!-- codebones -->").count();
-    assert!(
-        section_starts <= 1,
-        "codebones section must appear at most once in CLAUDE.md; found {section_starts} times"
+    assert_eq!(
+        contents, original,
+        "CLAUDE.md contents must be exactly unchanged by repeated index runs"
     );
     Ok(())
 }
 
-/// AC10: When `AGENTS.md` exists, `index` appends a codebones section on
-/// first run.
+/// FND-1 AC4: Existing `AGENTS.md` contents must be exactly unchanged by
+/// `index`.
 #[test]
-fn test_index_appends_to_agents_md_when_it_exists() -> Result<(), Box<dyn std::error::Error>> {
+fn test_index_preserves_existing_agents_md_exactly() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
     let agents_md = dir.path().join("AGENTS.md");
-    fs::write(&agents_md, "# Agents\n\nExisting content.\n").expect("write AGENTS.md");
+    let original = "# Agents\n\nExisting content.\n";
+    fs::write(&agents_md, original).expect("write AGENTS.md");
 
     api::index(dir.path()).expect("index should succeed");
 
     let contents = fs::read_to_string(&agents_md)?;
-    assert!(
-        contents.contains("codebones"),
-        "AGENTS.md must contain a codebones section after index; got: {contents}"
-    );
-    assert!(
-        contents.contains("Agents"),
-        "original AGENTS.md content must be preserved; got: {contents}"
+    assert_eq!(
+        contents, original,
+        "AGENTS.md contents must be exactly unchanged by index"
     );
     Ok(())
 }
 
-/// AC10 (idempotency): `index` does NOT append a duplicate codebones section
-/// to `AGENTS.md` on repeated runs.
+/// FND-1 AC4: Existing `AGENTS.md` contents remain exactly unchanged on
+/// repeated `index` runs, including files that already mention codebones.
 #[test]
-fn test_index_does_not_duplicate_agents_md_section() -> Result<(), Box<dyn std::error::Error>> {
+fn test_index_preserves_existing_agents_md_with_codebones_text_exactly(
+) -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new().expect("failed to create tempdir");
     write_rust_fixture(&dir, "lib.rs", RUST_FIXTURE);
 
     let agents_md = dir.path().join("AGENTS.md");
-    fs::write(&agents_md, "# Agents\n").expect("write AGENTS.md");
+    let original = "# Agents\n\nExisting codebones notes.\n";
+    fs::write(&agents_md, original).expect("write AGENTS.md");
 
     api::index(dir.path()).expect("first index");
     api::index(dir.path()).expect("second index");
 
     let contents = fs::read_to_string(&agents_md)?;
-    let section_starts = contents.matches("## codebones").count()
-        + contents.matches("## Codebones").count()
-        + contents.matches("<!-- codebones -->").count();
-    assert!(
-        section_starts <= 1,
-        "codebones section must appear at most once in AGENTS.md; found {section_starts} times"
+    assert_eq!(
+        contents, original,
+        "AGENTS.md contents must be exactly unchanged by repeated index runs"
     );
     Ok(())
 }
@@ -1858,249 +1837,200 @@ fn graph_file_import_strings_match_source_import() -> Result<(), Box<dyn std::er
 }
 
 // ---------------------------------------------------------------------------
-// init command — AC 1-7, 9
+// init command
 // ---------------------------------------------------------------------------
 
-/// AC 1: init detects Claude Code by checking whether ~/.claude/ exists.
-/// When ~/.claude/ is present, the function must create/update settings.json
-/// (tested separately); here we verify the call itself succeeds.
+fn init_canonical_skill_path(home_dir: &Path) -> PathBuf {
+    home_dir
+        .join(".codebones")
+        .join("skills")
+        .join("codebones")
+        .join("SKILL.md")
+}
+
+fn init_codex_global_skill_path(home_dir: &Path) -> PathBuf {
+    home_dir
+        .join(".agents")
+        .join("skills")
+        .join("codebones")
+        .join("SKILL.md")
+}
+
+fn init_claude_global_skill_path(home_dir: &Path) -> PathBuf {
+    home_dir
+        .join(".claude")
+        .join("skills")
+        .join("codebones")
+        .join("SKILL.md")
+}
+
+fn init_claude_mcp_config_path(home_dir: &Path) -> PathBuf {
+    home_dir.join(".claude").join("settings.json")
+}
+
+fn init_cursor_mcp_config_path(home_dir: &Path) -> PathBuf {
+    home_dir.join(".cursor").join("mcp.json")
+}
+
+fn assert_init_default_skills_exist(home_dir: &Path) {
+    assert!(
+        init_canonical_skill_path(home_dir).exists(),
+        "api::init should create the canonical codebones skill"
+    );
+    assert!(
+        init_codex_global_skill_path(home_dir).exists(),
+        "api::init should create the Codex global codebones skill"
+    );
+}
+
+fn assert_init_no_mcp_configs(home_dir: &Path) {
+    assert!(
+        !init_claude_mcp_config_path(home_dir).exists(),
+        "api::init should not silently create Claude MCP settings"
+    );
+    assert!(
+        !init_cursor_mcp_config_path(home_dir).exists(),
+        "api::init should not silently create Cursor MCP config"
+    );
+}
+
 #[test]
-fn init_succeeds_when_claude_dir_exists() -> Result<(), Box<dyn std::error::Error>> {
+fn init_creates_default_canonical_and_codex_skills_without_mcp_configs(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let home = TempDir::new()?;
+
+    api::init(home.path())?;
+
+    assert_init_default_skills_exist(home.path());
+    assert!(
+        !init_claude_global_skill_path(home.path()).exists(),
+        "Claude global skill should not be installed when .claude is absent"
+    );
+    assert_init_no_mcp_configs(home.path());
+    Ok(())
+}
+
+#[test]
+fn init_installs_claude_global_skill_when_claude_dir_exists_without_mcp_config(
+) -> Result<(), Box<dyn std::error::Error>> {
     let home = TempDir::new()?;
     fs::create_dir_all(home.path().join(".claude"))?;
 
     api::init(home.path())?;
 
+    assert!(
+        !init_claude_mcp_config_path(home.path()).exists(),
+        "api::init should not silently create Claude MCP settings"
+    );
+    assert_init_default_skills_exist(home.path());
+    assert!(
+        init_claude_global_skill_path(home.path()).exists(),
+        "api::init should install Claude global skill when .claude exists"
+    );
+    assert!(
+        !init_cursor_mcp_config_path(home.path()).exists(),
+        "api::init should not silently create Cursor MCP config"
+    );
     Ok(())
 }
 
-/// AC 2: init detects Cursor by checking whether ~/.cursor/ exists.
 #[test]
-fn init_succeeds_when_cursor_dir_exists() -> Result<(), Box<dyn std::error::Error>> {
+fn init_does_not_create_cursor_mcp_config_when_cursor_dir_exists(
+) -> Result<(), Box<dyn std::error::Error>> {
     let home = TempDir::new()?;
     fs::create_dir_all(home.path().join(".cursor"))?;
 
     api::init(home.path())?;
 
+    assert!(
+        !init_cursor_mcp_config_path(home.path()).exists(),
+        "api::init should not silently create Cursor MCP config"
+    );
+    assert_init_default_skills_exist(home.path());
+    assert!(
+        !init_claude_global_skill_path(home.path()).exists(),
+        "Cursor detection should not install Claude global skill"
+    );
+    assert!(
+        !init_claude_mcp_config_path(home.path()).exists(),
+        "api::init should not silently create Claude MCP settings"
+    );
     Ok(())
 }
 
-/// AC 3: When ~/.claude/ exists, init creates ~/.claude/settings.json with
-/// the codebones-mcp entry under `mcpServers`.
 #[test]
-fn init_creates_claude_settings_json_when_missing() -> Result<(), Box<dyn std::error::Error>> {
+fn init_preserves_existing_claude_settings_json_without_mcp_mutation(
+) -> Result<(), Box<dyn std::error::Error>> {
     let home = TempDir::new()?;
-    fs::create_dir_all(home.path().join(".claude"))?;
+    let settings_path = init_claude_mcp_config_path(home.path());
+    fs::create_dir_all(settings_path.parent().expect("settings should have parent"))?;
 
-    api::init(home.path())?;
-
-    let settings_path = home.path().join(".claude").join("settings.json");
-    assert!(
-        settings_path.exists(),
-        "~/.claude/settings.json must be created; path: {}",
-        settings_path.display()
-    );
-
-    let content = fs::read_to_string(&settings_path)?;
-    let json: serde_json::Value =
-        serde_json::from_str(&content).expect("settings.json must contain valid JSON");
-
-    assert!(
-        json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
-        "mcpServers.codebones.command must equal \"codebones-mcp\"; got: {}",
-        json
-    );
-    assert!(
-        json["mcpServers"]["codebones"]["type"] == "stdio",
-        "mcpServers.codebones.type must equal \"stdio\"; got: {}",
-        json
-    );
-
-    Ok(())
-}
-
-/// AC 4: If ~/.claude/settings.json already has other MCP servers configured,
-/// they are preserved after init runs.
-#[test]
-fn init_preserves_existing_mcp_servers_in_claude_settings() -> Result<(), Box<dyn std::error::Error>>
-{
-    let home = TempDir::new()?;
-    let claude_dir = home.path().join(".claude");
-    fs::create_dir_all(&claude_dir)?;
-
-    // Pre-populate with an existing MCP server
-    let existing = serde_json::json!({
+    let existing = serde_json::to_string_pretty(&serde_json::json!({
         "mcpServers": {
             "other-tool": {
                 "command": "other-mcp",
                 "args": [],
                 "type": "stdio"
             }
+        },
+        "permissions": {
+            "allow": ["Read"]
         }
-    });
-    fs::write(
-        claude_dir.join("settings.json"),
-        serde_json::to_string_pretty(&existing)?,
-    )?;
+    }))?;
+    fs::write(&settings_path, &existing)?;
 
     api::init(home.path())?;
 
-    let content = fs::read_to_string(claude_dir.join("settings.json"))?;
-    let json: serde_json::Value = serde_json::from_str(&content)?;
-
+    assert_eq!(
+        fs::read_to_string(&settings_path)?,
+        existing,
+        "api::init should not mutate an existing Claude MCP settings file"
+    );
+    assert_init_default_skills_exist(home.path());
     assert!(
-        json["mcpServers"]["other-tool"]["command"] == "other-mcp",
-        "pre-existing server 'other-tool' must be preserved; got: {}",
-        json
+        init_claude_global_skill_path(home.path()).exists(),
+        "api::init should still install Claude global skill when .claude exists"
     );
     assert!(
-        json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
-        "codebones-mcp entry must also be present; got: {}",
-        json
+        !init_cursor_mcp_config_path(home.path()).exists(),
+        "api::init should not create Cursor MCP config"
     );
-
     Ok(())
 }
 
-/// AC 5: If codebones-mcp is already registered in ~/.claude/settings.json,
-/// init does not duplicate the entry.
 #[test]
-fn init_does_not_duplicate_codebones_entry_in_claude_settings(
+fn init_preserves_existing_cursor_mcp_json_without_mcp_mutation(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let home = TempDir::new()?;
-    let claude_dir = home.path().join(".claude");
-    fs::create_dir_all(&claude_dir)?;
+    let mcp_path = init_cursor_mcp_config_path(home.path());
+    fs::create_dir_all(mcp_path.parent().expect("mcp config should have parent"))?;
 
-    // Pre-populate with codebones already registered
-    let existing = serde_json::json!({
-        "mcpServers": {
-            "codebones": {
-                "command": "codebones-mcp",
-                "args": [],
-                "type": "stdio"
-            }
-        }
-    });
-    fs::write(
-        claude_dir.join("settings.json"),
-        serde_json::to_string_pretty(&existing)?,
-    )?;
-
-    // Run init twice
-    api::init(home.path())?;
-    api::init(home.path())?;
-
-    let content = fs::read_to_string(claude_dir.join("settings.json"))?;
-    let json: serde_json::Value = serde_json::from_str(&content)?;
-
-    // mcpServers must remain a flat object with exactly one "codebones" key
-    let mcp_servers = json["mcpServers"]
-        .as_object()
-        .expect("mcpServers must be an object");
-    assert_eq!(
-        mcp_servers.keys().filter(|k| *k == "codebones").count(),
-        1,
-        "codebones must appear exactly once in mcpServers; got: {}",
-        json
-    );
-
-    Ok(())
-}
-
-/// AC 6: When ~/.cursor/ exists, init creates ~/.cursor/mcp.json with the
-/// codebones-mcp entry under `mcpServers`.
-#[test]
-fn init_creates_cursor_mcp_json_when_missing() -> Result<(), Box<dyn std::error::Error>> {
-    let home = TempDir::new()?;
-    fs::create_dir_all(home.path().join(".cursor"))?;
-
-    api::init(home.path())?;
-
-    let mcp_path = home.path().join(".cursor").join("mcp.json");
-    assert!(
-        mcp_path.exists(),
-        "~/.cursor/mcp.json must be created; path: {}",
-        mcp_path.display()
-    );
-
-    let content = fs::read_to_string(&mcp_path)?;
-    let json: serde_json::Value =
-        serde_json::from_str(&content).expect("mcp.json must contain valid JSON");
-
-    assert!(
-        json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
-        "mcpServers.codebones.command must equal \"codebones-mcp\"; got: {}",
-        json
-    );
-    assert!(
-        json["mcpServers"]["codebones"]["type"] == "stdio",
-        "mcpServers.codebones.type must equal \"stdio\"; got: {}",
-        json
-    );
-
-    Ok(())
-}
-
-/// AC 7: Existing MCP servers in ~/.cursor/mcp.json are preserved when init runs.
-#[test]
-fn init_preserves_existing_mcp_servers_in_cursor_config() -> Result<(), Box<dyn std::error::Error>>
-{
-    let home = TempDir::new()?;
-    let cursor_dir = home.path().join(".cursor");
-    fs::create_dir_all(&cursor_dir)?;
-
-    let existing = serde_json::json!({
+    let existing = serde_json::to_string_pretty(&serde_json::json!({
         "mcpServers": {
             "cursor-tool": {
                 "command": "cursor-mcp",
                 "args": [],
                 "type": "stdio"
             }
+        },
+        "unrelated": {
+            "enabled": true
         }
-    });
-    fs::write(
-        cursor_dir.join("mcp.json"),
-        serde_json::to_string_pretty(&existing)?,
-    )?;
+    }))?;
+    fs::write(&mcp_path, &existing)?;
 
     api::init(home.path())?;
 
-    let content = fs::read_to_string(cursor_dir.join("mcp.json"))?;
-    let json: serde_json::Value = serde_json::from_str(&content)?;
-
-    assert!(
-        json["mcpServers"]["cursor-tool"]["command"] == "cursor-mcp",
-        "pre-existing server 'cursor-tool' must be preserved; got: {}",
-        json
+    assert_eq!(
+        fs::read_to_string(&mcp_path)?,
+        existing,
+        "api::init should not mutate an existing Cursor MCP config file"
     );
+    assert_init_default_skills_exist(home.path());
     assert!(
-        json["mcpServers"]["codebones"]["command"] == "codebones-mcp",
-        "codebones-mcp entry must also be present; got: {}",
-        json
+        !init_claude_mcp_config_path(home.path()).exists(),
+        "api::init should not create Claude MCP settings"
     );
-
-    Ok(())
-}
-
-/// AC 9: If no supported AI tools are found (neither ~/.claude/ nor ~/.cursor/
-/// exists), init returns Ok and does not create any files.
-#[test]
-fn init_exits_successfully_when_no_tools_detected() -> Result<(), Box<dyn std::error::Error>> {
-    let home = TempDir::new()?;
-    // Neither .claude nor .cursor directory is created
-
-    api::init(home.path())?;
-
-    // No config files should have been created
-    assert!(
-        !home.path().join(".claude").join("settings.json").exists(),
-        "settings.json must not be created when .claude/ is absent"
-    );
-    assert!(
-        !home.path().join(".cursor").join("mcp.json").exists(),
-        "mcp.json must not be created when .cursor/ is absent"
-    );
-
     Ok(())
 }
 

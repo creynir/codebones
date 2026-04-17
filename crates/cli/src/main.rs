@@ -1,5 +1,11 @@
-use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use anyhow::{bail, Result};
+use clap::{Parser, Subcommand, ValueEnum};
+use codebones_core::installer::{
+    apply_init_actions, FileActionStatus, InitAction, InitContext, InstallMethod, McpTargetKind,
+    SkillTargetKind,
+};
+use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "codebones", version, about = "Strip codebases down to their structural skeleton", long_about = None)]
@@ -93,6 +99,24 @@ pub enum Commands {
         /// Override home directory (for testing)
         #[arg(long, hide = true)]
         home: Option<PathBuf>,
+        /// Accept the default skill initialization plan without prompting
+        #[arg(long)]
+        yes: bool,
+        /// Print planned changes without writing files
+        #[arg(long)]
+        dry_run: bool,
+        /// Skill target to install; may be repeated
+        #[arg(long = "skill-target", value_enum)]
+        skill_targets: Vec<InitSkillTargetArg>,
+        /// How to install selected skill targets
+        #[arg(long = "skill-method", value_enum, default_value = "copy")]
+        skill_method: InitSkillMethodArg,
+        /// MCP target to register; may be repeated
+        #[arg(long = "mcp-target", value_enum)]
+        mcp_targets: Vec<InitMcpTargetArg>,
+        /// Do not register MCP configuration
+        #[arg(long)]
+        no_mcp: bool,
     },
     /// Packs the repository's skeleton into a single string for LLM context
     Pack {
@@ -127,6 +151,35 @@ pub enum Commands {
         #[arg(long)]
         ignore: Option<Vec<String>>,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InitSkillTargetArg {
+    ClaudeGlobal,
+    ClaudeProject,
+    CodexGlobal,
+    UniversalProject,
+    CursorProject,
+    OpenCodeGlobal,
+    GeminiProject,
+    DroidGlobal,
+    PiGlobal,
+    All,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InitSkillMethodArg {
+    Copy,
+    Symlink,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum InitMcpTargetArg {
+    ClaudeGlobal,
+    CursorGlobal,
+    All,
+    None,
 }
 
 fn format_graph(
@@ -272,16 +325,252 @@ fn escape_xml(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn main() -> anyhow::Result<()> {
+fn default_init_skill_actions(home_dir: &Path) -> Vec<InitAction> {
+    let mut actions = vec![InitAction::InstallSkill {
+        target: SkillTargetKind::CodexGlobal,
+        method: InstallMethod::Copy,
+    }];
+
+    if home_dir.join(".claude").exists() {
+        actions.push(InitAction::InstallSkill {
+            target: SkillTargetKind::ClaudeGlobal,
+            method: InstallMethod::Copy,
+        });
+    }
+
+    actions
+}
+
+fn skill_targets_from_args(targets: &[InitSkillTargetArg]) -> Result<Vec<SkillTargetKind>> {
+    if targets.contains(&InitSkillTargetArg::None) && targets.len() > 1 {
+        bail!("conflict: --skill-target none cannot be combined with other skill targets");
+    }
+
+    let mut selected = Vec::new();
+    for target in targets {
+        match target {
+            InitSkillTargetArg::ClaudeGlobal => selected.push(SkillTargetKind::ClaudeGlobal),
+            InitSkillTargetArg::ClaudeProject => selected.push(SkillTargetKind::ClaudeProject),
+            InitSkillTargetArg::CodexGlobal => selected.push(SkillTargetKind::CodexGlobal),
+            InitSkillTargetArg::UniversalProject => {
+                selected.push(SkillTargetKind::UniversalProject)
+            }
+            InitSkillTargetArg::CursorProject => selected.push(SkillTargetKind::CursorProject),
+            InitSkillTargetArg::OpenCodeGlobal => selected.push(SkillTargetKind::OpenCodeGlobal),
+            InitSkillTargetArg::GeminiProject => selected.push(SkillTargetKind::GeminiProject),
+            InitSkillTargetArg::DroidGlobal => selected.push(SkillTargetKind::DroidGlobal),
+            InitSkillTargetArg::PiGlobal => selected.push(SkillTargetKind::PiGlobal),
+            InitSkillTargetArg::All => {
+                selected.extend([
+                    SkillTargetKind::ClaudeGlobal,
+                    SkillTargetKind::ClaudeProject,
+                    SkillTargetKind::CodexGlobal,
+                    SkillTargetKind::UniversalProject,
+                    SkillTargetKind::CursorProject,
+                    SkillTargetKind::OpenCodeGlobal,
+                    SkillTargetKind::GeminiProject,
+                    SkillTargetKind::DroidGlobal,
+                    SkillTargetKind::PiGlobal,
+                ]);
+            }
+            InitSkillTargetArg::None => {}
+        }
+    }
+
+    Ok(selected)
+}
+
+fn mcp_targets_from_args(targets: &[InitMcpTargetArg], no_mcp: bool) -> Result<Vec<McpTargetKind>> {
+    if no_mcp
+        && targets
+            .iter()
+            .any(|target| !matches!(target, InitMcpTargetArg::None))
+    {
+        bail!("conflict: --mcp-target cannot be combined with --no-mcp");
+    }
+
+    if targets.contains(&InitMcpTargetArg::None) && targets.len() > 1 {
+        bail!("conflict: --mcp-target none cannot be combined with other MCP targets");
+    }
+
+    if no_mcp {
+        return Ok(Vec::new());
+    }
+
+    let mut selected = Vec::new();
+    for target in targets {
+        match target {
+            InitMcpTargetArg::ClaudeGlobal => selected.push(McpTargetKind::ClaudeGlobal),
+            InitMcpTargetArg::CursorGlobal => selected.push(McpTargetKind::CursorGlobal),
+            InitMcpTargetArg::All => {
+                selected.extend([McpTargetKind::ClaudeGlobal, McpTargetKind::CursorGlobal]);
+            }
+            InitMcpTargetArg::None => {}
+        }
+    }
+
+    Ok(selected)
+}
+
+fn install_method_from_arg(method: InitSkillMethodArg) -> InstallMethod {
+    match method {
+        InitSkillMethodArg::Copy => InstallMethod::Copy,
+        InitSkillMethodArg::Symlink => InstallMethod::Symlink,
+    }
+}
+
+fn confirm_default_init_plan() -> Result<bool> {
+    eprint!("Install default codebones skills? [y/N] ");
+    io::stderr().flush()?;
+
+    let mut answer = String::new();
+    io::stdin().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
+}
+
+fn skill_target_label(target: SkillTargetKind) -> &'static str {
+    match target {
+        SkillTargetKind::ClaudeGlobal => "Claude global skill",
+        SkillTargetKind::ClaudeProject => "Claude project skill",
+        SkillTargetKind::CodexGlobal => "Codex global skill",
+        SkillTargetKind::UniversalProject => "universal project skill",
+        SkillTargetKind::CursorProject => "Cursor project skill",
+        SkillTargetKind::OpenCodeGlobal => "OpenCode global skill",
+        SkillTargetKind::GeminiProject => "Gemini project skill",
+        SkillTargetKind::DroidGlobal => "Droid global skill",
+        SkillTargetKind::PiGlobal => "Pi global skill",
+    }
+}
+
+fn mcp_target_label(target: McpTargetKind) -> &'static str {
+    match target {
+        McpTargetKind::ClaudeGlobal => "Claude MCP config",
+        McpTargetKind::CursorGlobal => "Cursor MCP config",
+    }
+}
+
+fn install_method_label(method: InstallMethod) -> &'static str {
+    match method {
+        InstallMethod::Copy => "copy",
+        InstallMethod::Symlink => "symlink",
+    }
+}
+
+fn status_label(status: FileActionStatus) -> &'static str {
+    match status {
+        FileActionStatus::Created => "created",
+        FileActionStatus::Updated => "updated",
+        FileActionStatus::Unchanged => "unchanged",
+        FileActionStatus::ReplacedCodebonesOwned => "replaced codebones-owned file",
+        FileActionStatus::WouldCreate => "would create",
+        FileActionStatus::WouldUpdate => "would update",
+        FileActionStatus::WouldReplaceCodebonesOwned => "would replace codebones-owned file",
+        FileActionStatus::WouldLeaveUnchanged => "would leave unchanged",
+    }
+}
+
+fn init_action_label(action: InitAction) -> String {
+    match action {
+        InitAction::MaterializeCanonicalSkill => "canonical skill".to_string(),
+        InitAction::InstallSkill { target, method } => {
+            format!(
+                "{} ({})",
+                skill_target_label(target),
+                install_method_label(method)
+            )
+        }
+        InitAction::RegisterMcp { target } => mcp_target_label(target).to_string(),
+    }
+}
+
+fn format_init_status(action: InitAction, status: FileActionStatus, dry_run: bool) -> String {
+    let message = format!("{}: {}", init_action_label(action), status_label(status));
+    if dry_run {
+        format!("dry-run: {}", message)
+    } else {
+        message
+    }
+}
+
+fn remove_skill_target_actions(actions: &mut Vec<InitAction>, selected_target: SkillTargetKind) {
+    actions.retain(|action| {
+        !matches!(
+            action,
+            InitAction::InstallSkill { target, .. } if *target == selected_target
+        )
+    });
+}
+
+fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Init { home } => {
+        Commands::Init {
+            home,
+            yes,
+            dry_run,
+            skill_targets,
+            skill_method,
+            mcp_targets,
+            no_mcp,
+        } => {
             let home_dir = home
                 .unwrap_or_else(|| dirs::home_dir().expect("Could not determine home directory"));
-            let messages = codebones_core::api::init(&home_dir)?;
-            for msg in messages {
-                println!("{}", msg);
+            let has_explicit_skill_targets = !skill_targets.is_empty();
+            let has_explicit_mcp_targets = !mcp_targets.is_empty();
+            let has_explicit_targets = has_explicit_skill_targets || has_explicit_mcp_targets;
+
+            if !yes && !dry_run && !has_explicit_targets && !io::stdin().is_terminal() {
+                bail!(
+                    "non-interactive init requires --yes, --dry-run, or explicit --skill-target/--mcp-target targets"
+                );
+            }
+
+            let explicit_skill_targets = skill_targets_from_args(&skill_targets)?;
+            let mut use_default_skills = yes && !has_explicit_skill_targets;
+            if !has_explicit_targets && dry_run {
+                use_default_skills = true;
+            }
+            if !yes && !dry_run && !has_explicit_targets {
+                use_default_skills = confirm_default_init_plan()?;
+                if !use_default_skills {
+                    println!("Init cancelled");
+                    return Ok(());
+                }
+            }
+
+            let method = install_method_from_arg(skill_method);
+            let mut actions = Vec::new();
+
+            if use_default_skills {
+                actions.extend(default_init_skill_actions(&home_dir));
+            }
+            if has_explicit_skill_targets {
+                for target in explicit_skill_targets {
+                    remove_skill_target_actions(&mut actions, target);
+                    actions.push(InitAction::InstallSkill { target, method });
+                }
+            }
+
+            actions.extend(
+                mcp_targets_from_args(&mcp_targets, no_mcp)?
+                    .into_iter()
+                    .map(|target| InitAction::RegisterMcp { target }),
+            );
+
+            if actions.is_empty() {
+                println!("No init actions selected");
+                return Ok(());
+            }
+
+            let ctx = InitContext {
+                home_dir,
+                project_dir: std::env::current_dir()?,
+            };
+            let results = apply_init_actions(&ctx, &actions, dry_run)?;
+
+            for (action, status) in results {
+                println!("{}", format_init_status(action, status, dry_run));
             }
         }
         Commands::Map {

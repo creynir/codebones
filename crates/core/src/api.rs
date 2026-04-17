@@ -1,5 +1,8 @@
 use crate::cache::{CacheStore, SqliteCache, Symbol as CacheSymbol};
 use crate::indexer::{DefaultIndexer, Indexer, IndexerOptions};
+use crate::installer::{
+    apply_init_actions, FileActionStatus, InitAction, InitContext, InstallMethod, SkillTargetKind,
+};
 use crate::parser::{get_spec_for_extension, parse_file};
 use crate::plugin::{OutputFormat, Packer};
 use anyhow::Result;
@@ -42,25 +45,10 @@ pub struct BlastRadiusResult {
     pub affected_files: Vec<AffectedFile>,
 }
 
-const CODEBONES_SECTION: &str = r#"
-## Codebones
-
-This project is indexed by codebones. Prefer codebones tools over file crawling:
-
-- `codebones search <name>` — find functions/classes by name
-- `codebones get <symbol> --filter <keyword>` — read matching lines only (cheap)
-- `codebones get <symbol>` — read full source (when you need the complete implementation)
-- `codebones outline <file>` — see file structure (signatures, bodies elided)
-- `codebones graph <file>` — blast radius: what depends on this file and what they import
-"#;
-
-/// Performs first-run setup for a project directory:
+/// Prepares index storage for a project directory:
 /// - Creates `.codebones/` directory if it doesn't exist
 /// - Deletes legacy `codebones.db` at root if it exists
-/// - If `.git/` exists: ensures `.codebones/` is in `.gitignore`
-/// - If `CLAUDE.md` exists: appends codebones section (if not already present)
-/// - If `AGENTS.md` exists: appends codebones section (if not already present)
-fn first_run_setup(dir: &Path) -> Result<()> {
+fn prepare_index_storage(dir: &Path) -> Result<()> {
     // Create .codebones/ directory if it doesn't exist
     let dot_codebones = dir.join(".codebones");
     if !dot_codebones.exists() {
@@ -73,48 +61,6 @@ fn first_run_setup(dir: &Path) -> Result<()> {
         fs::remove_file(&legacy_db)?;
     }
 
-    // If .git/ exists, ensure .codebones/ is in .gitignore
-    if dir.join(".git").exists() {
-        let gitignore_path = dir.join(".gitignore");
-        let existing = if gitignore_path.exists() {
-            fs::read_to_string(&gitignore_path)?
-        } else {
-            String::new()
-        };
-        if !existing.lines().any(|line| line.trim() == ".codebones/") {
-            let new_content = if existing.is_empty() {
-                ".codebones/\n".to_string()
-            } else if existing.ends_with('\n') {
-                format!("{}.codebones/\n", existing)
-            } else {
-                format!("{}\n.codebones/\n", existing)
-            };
-            fs::write(&gitignore_path, new_content)?;
-        }
-    }
-
-    // If CLAUDE.md exists, append codebones section if not already present
-    let claude_md = dir.join("CLAUDE.md");
-    if claude_md.exists() {
-        let contents = fs::read_to_string(&claude_md)?;
-        if !contents.contains("codebones") {
-            let mut file = fs::OpenOptions::new().append(true).open(&claude_md)?;
-            use std::io::Write;
-            file.write_all(CODEBONES_SECTION.as_bytes())?;
-        }
-    }
-
-    // If AGENTS.md exists, append codebones section if not already present
-    let agents_md = dir.join("AGENTS.md");
-    if agents_md.exists() {
-        let contents = fs::read_to_string(&agents_md)?;
-        if !contents.contains("codebones") {
-            let mut file = fs::OpenOptions::new().append(true).open(&agents_md)?;
-            use std::io::Write;
-            file.write_all(CODEBONES_SECTION.as_bytes())?;
-        }
-    }
-
     Ok(())
 }
 
@@ -122,8 +68,8 @@ fn first_run_setup(dir: &Path) -> Result<()> {
 ///
 /// Must be called before `get`, `outline`, or `search`; those functions read from the cache `index` populates.
 pub fn index(dir: &Path) -> Result<()> {
-    // Perform first-run setup (create .codebones/, clean legacy db, update gitignore/docs)
-    first_run_setup(dir)?;
+    // Prepare index storage without mutating repository ignore or agent docs.
+    prepare_index_storage(dir)?;
 
     let db_path = dir.join(".codebones").join("codebones.db");
     let db_path_str = db_path
@@ -716,69 +662,78 @@ pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<Blast
     })
 }
 
-/// Registers the codebones MCP server entry in an AI tool's config file.
+fn init_status_label(status: FileActionStatus) -> &'static str {
+    match status {
+        FileActionStatus::Created => "created",
+        FileActionStatus::Updated => "updated",
+        FileActionStatus::Unchanged => "unchanged",
+        FileActionStatus::ReplacedCodebonesOwned => "replaced codebones-owned file",
+        FileActionStatus::WouldCreate => "would create",
+        FileActionStatus::WouldUpdate => "would update",
+        FileActionStatus::WouldReplaceCodebonesOwned => "would replace codebones-owned file",
+        FileActionStatus::WouldLeaveUnchanged => "would leave unchanged",
+    }
+}
+
+fn init_action_label(action: InitAction) -> String {
+    match action {
+        InitAction::MaterializeCanonicalSkill => "canonical skill".to_string(),
+        InitAction::InstallSkill { target, method } => {
+            let target = match target {
+                SkillTargetKind::ClaudeGlobal => "Claude global skill",
+                SkillTargetKind::ClaudeProject => "Claude project skill",
+                SkillTargetKind::CodexGlobal => "Codex global skill",
+                SkillTargetKind::UniversalProject => "universal project skill",
+                SkillTargetKind::CursorProject => "Cursor project skill",
+                SkillTargetKind::OpenCodeGlobal => "OpenCode global skill",
+                SkillTargetKind::GeminiProject => "Gemini project skill",
+                SkillTargetKind::DroidGlobal => "Droid global skill",
+                SkillTargetKind::PiGlobal => "Pi global skill",
+            };
+            let method = match method {
+                InstallMethod::Copy => "copy",
+                InstallMethod::Symlink => "symlink",
+            };
+            format!("{target} ({method})")
+        }
+        InitAction::RegisterMcp { target } => match target {
+            crate::installer::McpTargetKind::ClaudeGlobal => "Claude MCP config".to_string(),
+            crate::installer::McpTargetKind::CursorGlobal => "Cursor MCP config".to_string(),
+        },
+    }
+}
+
+/// Initializes codebones global skills without modifying MCP configuration.
 ///
-/// If the file does not exist, it is created. If `mcpServers.codebones` is
-/// already present the function is a no-op (idempotent).
-fn register_mcp_server(settings_path: &Path) -> Result<()> {
-    let mut root: serde_json::Value = if settings_path.exists() {
-        let text = fs::read_to_string(settings_path)?;
-        serde_json::from_str(&text).unwrap_or(serde_json::Value::Object(Default::default()))
-    } else {
-        serde_json::Value::Object(Default::default())
+/// Always materializes the canonical skill and installs the Codex global skill.
+/// Installs the Claude global skill only when `home_dir/.claude` already exists.
+pub fn init(home_dir: &Path) -> Result<Vec<String>> {
+    let ctx = InitContext {
+        home_dir: home_dir.to_path_buf(),
+        project_dir: home_dir.to_path_buf(),
     };
+    let mut actions = vec![InitAction::InstallSkill {
+        target: SkillTargetKind::CodexGlobal,
+        method: InstallMethod::Copy,
+    }];
 
-    // Ensure root is an object.
-    if !root.is_object() {
-        root = serde_json::Value::Object(Default::default());
-    }
-
-    // Ensure mcpServers object exists.
-    if root.get("mcpServers").is_none_or(|v| !v.is_object()) {
-        root["mcpServers"] = serde_json::Value::Object(Default::default());
-    }
-
-    // Only add the codebones entry if it isn't already there.
-    if root["mcpServers"].get("codebones").is_none() {
-        root["mcpServers"]["codebones"] = serde_json::json!({
-            "command": "codebones-mcp",
-            "args": [],
-            "type": "stdio"
+    if home_dir.join(".claude").exists() {
+        actions.push(InitAction::InstallSkill {
+            target: SkillTargetKind::ClaudeGlobal,
+            method: InstallMethod::Copy,
         });
     }
 
-    let pretty = serde_json::to_string_pretty(&root)?;
-    fs::write(settings_path, pretty)?;
-    Ok(())
-}
-
-/// Registers the codebones MCP server with AI tools installed on the user's machine.
-///
-/// Checks for Claude Code (`~/.claude/`) and Cursor (`~/.cursor/`) and adds the
-/// `codebones-mcp` entry to their respective config files if they are found.
-/// Returns a list of human-readable status messages for the caller to display.
-pub fn init(home_dir: &Path) -> Result<Vec<String>> {
-    let mut messages = Vec::new();
-
-    // Check for Claude Code
-    let claude_dir = home_dir.join(".claude");
-    if claude_dir.exists() {
-        register_mcp_server(&claude_dir.join("settings.json"))?;
-        messages.push("Claude Code: registered codebones-mcp".to_string());
-    }
-
-    // Check for Cursor
-    let cursor_dir = home_dir.join(".cursor");
-    if cursor_dir.exists() {
-        register_mcp_server(&cursor_dir.join("mcp.json"))?;
-        messages.push("Cursor: registered codebones-mcp".to_string());
-    }
-
-    if messages.is_empty() {
-        messages.push("No supported AI tools found".to_string());
-    }
-
-    Ok(messages)
+    Ok(apply_init_actions(&ctx, &actions, false)?
+        .into_iter()
+        .map(|(action, status)| {
+            format!(
+                "{}: {}",
+                init_action_label(action),
+                init_status_label(status)
+            )
+        })
+        .collect())
 }
 
 /// Options that control how `pack` filters and transforms files before bundling them.
