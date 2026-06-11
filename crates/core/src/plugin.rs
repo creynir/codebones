@@ -635,7 +635,7 @@ mod tests {
         let result = packer.pack(std::slice::from_ref(&file_path));
         assert!(result.is_ok());
         let output = result.expect("pack should succeed");
-        assert!(output.contains(&format!("## {}", file_path.display())));
+        assert!(output.contains(&format!("## {}", Packer::display_path(&file_path))));
     }
 
     #[test]
@@ -1091,8 +1091,8 @@ mod tests {
             .pack(&[src_path.clone(), tests_path.clone()])
             .expect("pack should succeed");
 
-        let expected_src = format!("- {}\n  - function alpha", src_path.display());
-        let expected_tests = format!("- {}\n  - function beta", tests_path.display());
+        let expected_src = format!("- {}\n  - function alpha", Packer::display_path(&src_path));
+        let expected_tests = format!("- {}\n  - function beta", Packer::display_path(&tests_path));
         assert!(
             output.contains(&expected_src),
             "src/lib.rs should retain its own symbols; got:\n{output}"

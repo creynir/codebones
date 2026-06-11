@@ -39,7 +39,9 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run Tests
-        run: cargo test --workspace --exclude codebones-python-ext
+        # --no-fail-fast: run every test binary even if one fails, so a single
+        # run surfaces all failures instead of stopping at the first binary.
+        run: cargo test --workspace --exclude codebones-python-ext --no-fail-fast
 
       - name: Check Python Packaging Crate
         if: matrix.os == 'ubuntu-latest'

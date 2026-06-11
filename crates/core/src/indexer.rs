@@ -240,6 +240,9 @@ mod tests {
         TempDir::new().unwrap()
     }
 
+    // Unix-only: the symlink that escapes the root is created with the unix
+    // symlink API. Windows symlink-escape behavior is a separate concern.
+    #[cfg(unix)]
     #[test]
     fn test_skips_symlinks_escaping_root() {
         let dir = setup_workspace();
@@ -250,7 +253,6 @@ mod tests {
         fs::write(&out_file, "out").unwrap();
 
         let symlink_path = root.join("link");
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&out_file, &symlink_path).unwrap();
 
         let indexer = DefaultIndexer;
