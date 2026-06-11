@@ -86,6 +86,18 @@ impl Packer {
             .collect()
     }
 
+    /// Renders a path with `/` separators on every platform so packed output is
+    /// portable and deterministic (Windows `path.display()` would otherwise emit
+    /// `.\dummy.rs`). On Unix `\` is a legal filename character and is left alone.
+    fn display_path(path: &Path) -> String {
+        let s = path.display().to_string();
+        if cfg!(windows) {
+            s.replace('\\', "/")
+        } else {
+            s
+        }
+    }
+
     /// Creates a new Packer instance.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -203,7 +215,7 @@ impl Packer {
                     for path in file_paths {
                         let mut entry = format!(
                             "    <file path=\"{}\">\n",
-                            Self::xml_escape(&path.display().to_string())
+                            Self::xml_escape(&Self::display_path(path))
                         );
                         for (kind, name) in lookup_symbols(path)? {
                             entry.push_str(&format!(
@@ -240,10 +252,8 @@ impl Packer {
                     let mut running_tokens: usize = 0;
                     output.push_str(header);
                     for path in file_paths {
-                        let mut entry = format!(
-                            "- {}\n",
-                            Self::markdown_sanitize(&path.display().to_string())
-                        );
+                        let mut entry =
+                            format!("- {}\n", Self::markdown_sanitize(&Self::display_path(path)));
                         for (kind, name) in lookup_symbols(path)? {
                             entry.push_str(&format!(
                                 "  - {} {}\n",
@@ -397,11 +407,11 @@ impl Packer {
                         OutputFormat::Xml => {
                             format!(
                                 "  <file path=\"{}\">\n    <content><![CDATA[\n\n]]></content>\n  </file>\n</repository>\n",
-                                Self::xml_escape(&path.display().to_string())
+                                Self::xml_escape(&Self::display_path(path))
                             )
                         }
                         OutputFormat::Markdown => {
-                            format!("## {}\n\n```\n\n```\n\n", path.display())
+                            format!("## {}\n\n```\n\n```\n\n", Self::display_path(path))
                         }
                     };
                     let wrapper_tokens = bpe.encode_with_special_tokens(&wrapper).len();
@@ -421,7 +431,7 @@ impl Packer {
                     }
                     output.push_str(&format!(
                         "  <file path=\"{}\">\n",
-                        Self::xml_escape(&path.display().to_string())
+                        Self::xml_escape(&Self::display_path(path))
                     ));
                     {
                         let safe_content = Self::xml_escape_cdata(&content);
@@ -463,7 +473,7 @@ impl Packer {
                     }
                     output.push_str(&format!(
                         "## {}\n\n",
-                        Self::markdown_sanitize(&path.display().to_string())
+                        Self::markdown_sanitize(&Self::display_path(path))
                     ));
                     {
                         // Find longest run of backticks in content and use one more as the fence
