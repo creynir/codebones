@@ -155,9 +155,20 @@ pub fn index(dir: &Path) -> Result<()> {
         let full_path = dir.join(&cached_path);
         match fs::symlink_metadata(&full_path) {
             Ok(_) => {
-                // The file still exists on disk but was skipped by the indexer
-                // (for example due to a transient read/permission failure). Keep
-                // the last known cached content instead of treating it as deleted.
+                // The file exists but the walker excluded it this run. If it is
+                // readable, the exclusion was deterministic (newly gitignored,
+                // grew past the size cap, became binary/secret-like, or turned
+                // into a symlink) — drop the row so the file stops serving
+                // stale content. Keep the row only when we cannot verify
+                // readability: a transient read/permission failure must not
+                // evict cached data.
+                match fs::File::open(&full_path) {
+                    Ok(_) => cache.delete_file(&cached_path)?,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        cache.delete_file(&cached_path)?;
+                    }
+                    Err(_) => {}
+                }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 cache.delete_file(&cached_path)?;

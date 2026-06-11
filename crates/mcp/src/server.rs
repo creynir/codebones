@@ -25,11 +25,7 @@ fn escape_json(s: &str) -> String {
     out
 }
 
-fn format_graph_mcp(
-    result: &codebones_core::api::GraphResult,
-    format: &str,
-    top: Option<usize>,
-) -> String {
+fn format_graph_mcp(result: &codebones_core::api::GraphResult, format: &str) -> String {
     match format {
         "json" => {
             let files_json: Vec<String> = result
@@ -88,11 +84,11 @@ fn format_graph_mcp(
                     f.path, f.import_count
                 ));
             }
-            if top.is_none() {
-                out.push_str("\n## Import Map\n");
-                for e in &result.edges {
-                    out.push_str(&format!("- `{}` → {}\n", e.from, e.to));
-                }
+            // One rule across all formats: `top` caps the files ranking only;
+            // the edge list is always the complete graph.
+            out.push_str("\n## Import Map\n");
+            for e in &result.edges {
+                out.push_str(&format!("- `{}` → {}\n", e.from, e.to));
             }
             out
         }
@@ -456,14 +452,15 @@ impl CodebonesMcpServer {
             )
         })?;
 
-        let unlimited = top == Some(0);
-        if !unlimited {
-            if let Some(n) = top {
+        // `top` caps the files ranking only (0 = uncapped); edges are always
+        // the complete graph.
+        if let Some(n) = top {
+            if n > 0 {
                 result.files.truncate(n);
             }
         }
 
-        let content = format_graph_mcp(&result, format_str, if unlimited { None } else { top });
+        let content = format_graph_mcp(&result, format_str);
         Ok(Json(GraphResponse { dir, content }))
     }
 

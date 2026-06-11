@@ -262,7 +262,7 @@ codebones outline [--dir <repo>] <path>      Skeleton view of an indexed file
 |---|---|
 | `<file>` | Show blast radius for this file, including what each affected file imports (omit for full graph) |
 | `--format markdown\|xml\|json` | Output format (default: markdown) |
-| `--top N` | Show only the N most-imported files (default: 50) |
+| `--top N` | Cap the "Most Imported Files" ranking at N entries (default: 50; 0 = uncapped). The Import Map / edge list is always the complete graph, in every format |
 | `--depth N` | Blast radius BFS depth (default: 3) |
 
 ## Plugins

@@ -268,6 +268,63 @@ fn index_preserves_cached_content_for_previously_indexed_unreadable_file_on_rein
     Ok(())
 }
 
+/// A file added to .gitignore after the first index must drop out of the
+/// cache on re-index instead of serving its last-indexed content forever.
+#[test]
+fn index_prunes_cached_rows_for_newly_gitignored_files() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    fs::write(dir.path().join("kept.rs"), "pub fn kept_fn() {}\n")?;
+    fs::write(dir.path().join("hidden.rs"), "pub fn hidden_fn() {}\n")?;
+
+    api::index(dir.path())?;
+    assert!(
+        !api::search(dir.path(), "hidden_fn")?.is_empty(),
+        "pre-condition: hidden.rs must be indexed before it is gitignored"
+    );
+
+    fs::write(dir.path().join(".gitignore"), "hidden.rs\n")?;
+    api::index(dir.path())?;
+
+    assert!(
+        api::search(dir.path(), "hidden_fn")?.is_empty(),
+        "newly gitignored file must be pruned from the cache"
+    );
+    assert!(
+        !api::search(dir.path(), "kept_fn")?.is_empty(),
+        "non-ignored files must survive the prune"
+    );
+
+    Ok(())
+}
+
+/// A file that grows past the indexer's size cap after being indexed must be
+/// pruned on re-index, not frozen at its last-indexed content.
+#[test]
+fn index_prunes_cached_rows_for_files_grown_past_size_cap() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = TempDir::new().expect("failed to create tempdir");
+    let grower = dir.path().join("grower.rs");
+    fs::write(&grower, "pub fn small_fn() {}\n")?;
+
+    api::index(dir.path())?;
+    assert!(
+        !api::search(dir.path(), "small_fn")?.is_empty(),
+        "pre-condition: grower.rs must be indexed while small"
+    );
+
+    // Grow beyond the 500 KiB default cap; the walker now skips the file.
+    let padding = format!("// {}\n", "x".repeat(600 * 1024));
+    fs::write(&grower, format!("pub fn small_fn() {{}}\n{}", padding))?;
+    api::index(dir.path())?;
+
+    assert!(
+        api::search(dir.path(), "small_fn")?.is_empty(),
+        "file grown past the size cap must be pruned from the cache"
+    );
+
+    Ok(())
+}
+
 // ===========================================================================
 // api::get() tests
 // ===========================================================================
