@@ -93,7 +93,7 @@ codebones init
 | **O(1) symbol retrieval** | SQLite cache with byte-offset indexing — `substr()` reads, no re-parsing |
 | **Secret filtering** | `.env`, private keys, credentials, and PEM files automatically excluded from output |
 | **Incremental indexing** | SHA-256 file hashing — only re-parses changed files on subsequent runs |
-| **First-run setup** | `index` auto-creates `.codebones/`, adds to `.gitignore`, and appends hints to `CLAUDE.md`/`AGENTS.md` |
+| **First-run setup** | `index` auto-creates `.codebones/` (add it to `.gitignore` yourself); `init` installs the agent skill and registers the MCP server |
 
 **Supported languages:** Rust, Python, Go, TypeScript, JavaScript, Java, C, C++, C#, Ruby, PHP, Swift.
 
@@ -195,7 +195,7 @@ All numbers are cold-start medians in milliseconds. Full methodology and raw dat
 - **Language coverage** — 12 languages have AST support. Unsupported files are indexed as plain text (no symbol extraction or body elision).
 - **File size cap** — Files over 500 KB are skipped. Large generated files and vendored code won't appear in output.
 - **Scope tracking** — Qualified names are built from AST container nodes (class, impl, namespace). Some scope types aren't tracked: Go packages, Python module-level groupings, Rust trait bounds.
-- **Import resolution** — Supports file-path imports (`./utils`, `../db`), Python dotted modules (`from app.core.event import Event`), and Python relative imports (`from .utils import helper`). External/stdlib imports (e.g., `import os`) are stored but don't resolve to local files.
+- **Import resolution** — Supports file-path imports (`./utils`, `../db`), directory imports resolving to `index.*`, TS/JS re-exports and dynamic `import()`, Python dotted modules (`from app.core.event import Event`), and Python relative imports (`from .utils import helper`). External/stdlib imports (e.g., `import os`) are stored but don't resolve to local files. Aliased imports (tsconfig `paths`, webpack aliases) are not followed — treat blast radius as a lower bound and cross-check with a text search when a hot file shows suspiciously few importers.
 - **Inline functions** — Single-expression bodies (Python lambdas, Rust closures, JS arrow functions in class fields) may not be elided correctly.
 - **Symlinks** — Skipped by default. When enabled, symlinks pointing outside the workspace root are rejected to prevent path traversal.
 

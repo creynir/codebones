@@ -64,6 +64,50 @@ fn prepare_index_storage(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Bump whenever index derivation changes (import resolution, parser grammars,
+/// symbol extraction). Unchanged files are skipped by hash on re-index, so without
+/// a version bump a fixed resolver/parser would never touch rows written by an
+/// older binary.
+const INDEX_FORMAT_VERSION: &str = "2";
+
+fn index_version_path(dir: &Path) -> std::path::PathBuf {
+    dir.join(".codebones").join("index_version")
+}
+
+fn index_format_current(dir: &Path) -> bool {
+    fs::read_to_string(index_version_path(dir))
+        .map(|v| v.trim() == INDEX_FORMAT_VERSION)
+        .unwrap_or(false)
+}
+
+/// Returns true when the git working tree is clean (no staged/unstaged changes to
+/// tracked files and no untracked files). The tool's own `.codebones/` storage is
+/// not counted — it is always present after indexing and would otherwise mark
+/// every repo permanently dirty. Returns false on any git error.
+fn git_working_tree_clean(dir: &Path) -> bool {
+    let dirty = std::process::Command::new("git")
+        .args(["diff-index", "--quiet", "HEAD", "--"])
+        .current_dir(dir)
+        .status()
+        .map(|s| !s.success())
+        .unwrap_or(true);
+
+    let untracked = std::process::Command::new("git")
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(dir)
+        .output()
+        .ok()
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout).lines().any(|line| {
+                let line = line.trim();
+                !line.is_empty() && line != ".codebones" && !line.starts_with(".codebones/")
+            })
+        })
+        .unwrap_or(true);
+
+    !dirty && !untracked
+}
+
 /// Walks `dir`, hashes every eligible file, and upserts changed files and their symbols into the local SQLite cache.
 ///
 /// Must be called before `get`, `outline`, or `search`; those functions read from the cache `index` populates.
@@ -72,6 +116,12 @@ pub fn index(dir: &Path) -> Result<()> {
     prepare_index_storage(dir)?;
 
     let db_path = dir.join(".codebones").join("codebones.db");
+
+    // A DB written under an older index format must be rebuilt from scratch:
+    // the per-file hash skip below would otherwise keep its stale rows forever.
+    if db_path.exists() && !index_format_current(dir) {
+        fs::remove_file(&db_path)?;
+    }
     let db_path_str = db_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
@@ -170,19 +220,29 @@ pub fn index(dir: &Path) -> Result<()> {
         }
     }
 
-    // Write last_commit file if this is a git repo
+    // Write last_commit file if this is a git repo — but only when the working
+    // tree is clean. Stamping a dirty-tree index would let ensure_fresh() skip
+    // re-indexing after the changes are reverted (clean tree, same HEAD), serving
+    // the dirty snapshot indefinitely.
     if dir.join(".git").exists() {
-        if let Ok(output) = std::process::Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(dir)
-            .output()
-        {
-            if output.status.success() {
-                let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let _ = fs::write(dir.join(".codebones").join("last_commit"), &hash);
+        let last_commit_path = dir.join(".codebones").join("last_commit");
+        if git_working_tree_clean(dir) {
+            if let Ok(output) = std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir)
+                .output()
+            {
+                if output.status.success() {
+                    let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    let _ = fs::write(&last_commit_path, &hash);
+                }
             }
+        } else {
+            let _ = fs::remove_file(&last_commit_path);
         }
     }
+
+    fs::write(index_version_path(dir), INDEX_FORMAT_VERSION)?;
 
     Ok(())
 }
@@ -195,6 +255,11 @@ fn ensure_fresh(dir: &Path) -> Result<()> {
 
     // No db yet — must index
     if !db_path.exists() {
+        return index(dir);
+    }
+
+    // DB written under an older index format — must rebuild
+    if !index_format_current(dir) {
         return index(dir);
     }
 
@@ -221,34 +286,38 @@ fn ensure_fresh(dir: &Path) -> Result<()> {
         return index(dir); // HEAD changed
     }
 
-    // Check for uncommitted changes to tracked files
-    let dirty = std::process::Command::new("git")
-        .args(["diff-index", "--quiet", "HEAD", "--"])
-        .current_dir(dir)
-        .status()
-        .map(|s| !s.success()) // exit 1 = dirty
-        .unwrap_or(true); // assume dirty on error
-
-    // Also check for untracked files
-    let untracked = std::process::Command::new("git")
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(dir)
-        .output()
-        .ok()
-        .map(|o| !String::from_utf8_lossy(&o.stdout).trim().is_empty())
-        .unwrap_or(true);
-
-    if dirty || untracked {
-        return index(dir); // Working tree dirty
+    if !git_working_tree_clean(dir) {
+        return index(dir); // Working tree dirty or has untracked files
     }
 
     Ok(()) // Everything clean — skip indexing
 }
 
+/// Lexically normalizes a `/`-separated relative path: resolves `.` and `..`
+/// segments without touching the filesystem. `..` that would escape the root
+/// keeps the path unresolvable (returns the input unchanged) so it can never
+/// alias an unrelated indexed file.
+fn normalize_relative_path(path: &str) -> String {
+    let mut stack: Vec<&str> = Vec::new();
+    for segment in path.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if stack.pop().is_none() {
+                    return path.to_string();
+                }
+            }
+            other => stack.push(other),
+        }
+    }
+    stack.join("/")
+}
+
 /// Attempts to resolve a raw import string to a known file path in the cache.
 ///
-/// Tries stripping `./` or `../` prefixes and appending common extensions against the
-/// set of known file paths. Falls back to the raw import string if no match is found.
+/// Joins relative imports (`./`, `../`) against the source directory, normalizes
+/// `.`/`..` segments, and tries common extensions against the set of known file
+/// paths. Falls back to the raw import string if no match is found.
 fn resolve_import(raw: &str, source_dir: &str, known_paths: &HashSet<String>) -> String {
     // Common extensions to try when no extension is present
     const EXTS: &[&str] = &[
@@ -299,33 +368,31 @@ fn resolve_import(raw: &str, source_dir: &str, known_paths: &HashSet<String>) ->
     let candidates: Vec<String> = {
         let mut v = Vec::new();
 
-        // Relative import
+        // Relative import, with `.`/`..` segments resolved against source_dir
         let joined = if source_dir.is_empty() {
-            raw.to_string()
+            normalize_relative_path(raw)
         } else {
-            format!("{}/{}", source_dir, raw)
-        };
-
-        // Strip leading ./ for relative imports
-        let stripped = if let Some(base) = raw.strip_prefix("./") {
-            if source_dir.is_empty() {
-                base.to_string()
-            } else {
-                format!("{}/{}", source_dir, base)
-            }
-        } else {
-            joined.clone()
+            normalize_relative_path(&format!("{}/{}", source_dir, raw))
         };
 
         v.push(raw.to_string());
         v.push(joined.clone());
-        v.push(stripped.clone());
 
         // With extensions
         for ext in EXTS {
             v.push(format!("{}{}", raw, ext));
             v.push(format!("{}{}", joined, ext));
-            v.push(format!("{}{}", stripped, ext));
+        }
+
+        // Directory import resolving to an index file (e.g. `../api` → `../api/index.ts`).
+        // An empty join means the repo root (`'.'` or `'..'` from one level down).
+        let index_dir = if joined.is_empty() {
+            String::new()
+        } else {
+            format!("{}/", joined)
+        };
+        for ext in &[".ts", ".tsx", ".js", ".jsx"] {
+            v.push(format!("{}index{}", index_dir, ext));
         }
 
         v
@@ -606,6 +673,12 @@ pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<Blast
     let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
 
+    // An unknown path must not be reported as "0 affected files" — that reads
+    // as "safe to change" when the caller may simply have mistyped the path.
+    if cache.get_file_hash(file_path)?.is_none() {
+        anyhow::bail!("Path not found in index: {}", file_path);
+    }
+
     // Build reverse adjacency map: target → set of source files that import it.
     let all_edges = cache.list_all_imports()?;
     let mut reverse: HashMap<String, Vec<String>> = HashMap::new();
@@ -647,7 +720,11 @@ pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<Blast
         let imports: Vec<String> = raw_imports
             .into_iter()
             .filter_map(|(target_path, raw_import)| {
-                if target_path.contains(file_path) || file_path.contains(&target_path) {
+                // Exact match only — substring matching falsely attributed imports
+                // like `react` to any queried path containing that fragment.
+                // Transitively affected files have no direct import of the target;
+                // their list is legitimately empty.
+                if target_path == file_path {
                     Some(raw_import)
                 } else {
                     None

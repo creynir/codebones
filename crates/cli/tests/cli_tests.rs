@@ -1642,9 +1642,11 @@ fn setup_large_map_repo() -> TempDir {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
-    // Write 200 Rust files, each with several long function bodies.  The
-    // cumulative token count will comfortably exceed 50 000 tokens.
-    for i in 0..200 {
+    // Write 1500 Rust files, each with several functions. The cumulative token
+    // count of the SKELETON (paths + signatures) comfortably exceeds 50 000
+    // tokens — map is skeleton-only, so bodies don't count toward its output.
+    // (1000 files measured ~202 KB ≈ just under 50k tokens; 1500 clears it.)
+    for i in 0..1500 {
         let content = format!(
             r#"/// Module {i}
 pub fn function_a_{i}(input: &str) -> String {{
@@ -1855,8 +1857,8 @@ fn test_map_max_tokens_zero_returns_full_output() {
 
     let stdout = String::from_utf8_lossy(&output);
 
-    // Every one of the 200 module files must appear in the full output.
-    for i in 0..200 {
+    // Every one of the 1500 module files must appear in the full output.
+    for i in 0..1500 {
         let module = format!("mod_{:03}.rs", i);
         assert!(
             stdout.contains(&module),

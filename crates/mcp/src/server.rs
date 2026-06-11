@@ -7,6 +7,24 @@ use rmcp::{
     tool, tool_handler, tool_router, ErrorData, Json, ServerHandler,
 };
 
+/// Backslash must be escaped before quotes, and control characters (legal in
+/// Unix paths) would otherwise produce invalid JSON.
+fn escape_json(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn format_graph_mcp(
     result: &codebones_core::api::GraphResult,
     format: &str,
@@ -20,7 +38,7 @@ fn format_graph_mcp(
                 .map(|f| {
                     format!(
                         r#"{{"path":"{}","import_count":{}}}"#,
-                        f.path.replace('"', "\\\""),
+                        escape_json(&f.path),
                         f.import_count
                     )
                 })
@@ -31,8 +49,8 @@ fn format_graph_mcp(
                 .map(|e| {
                     format!(
                         r#"{{"from":"{}","to":"{}"}}"#,
-                        e.from.replace('"', "\\\""),
-                        e.to.replace('"', "\\\"")
+                        escape_json(&e.from),
+                        escape_json(&e.to)
                     )
                 })
                 .collect();
@@ -451,7 +469,7 @@ impl CodebonesMcpServer {
 
     #[tool(
         name = "graph_file",
-        description = "Blast radius: all files that depend on a given file, and what they import from it. Use before refactoring."
+        description = "Blast radius: all files that depend on a given file, and what they import from it. Use before refactoring. Treat the result as a lower bound — aliased (e.g. tsconfig paths), re-exported, or dynamic imports are not followed; cross-check with a text search if the count looks thin for a widely used file."
     )]
     async fn graph_file(
         &self,

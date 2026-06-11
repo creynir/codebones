@@ -583,12 +583,12 @@ fn main() -> Result<()> {
             include,
             ignore,
         } => {
-            // max_tokens == 0 means unlimited full-content pack; any positive value
-            // means skeleton-only output capped at that token budget.
-            let (no_files, token_limit) = if max_tokens == 0 {
-                (false, None)
+            // map is always skeleton-only (`pack --no-files`); max_tokens == 0 just
+            // lifts the token budget. It must never emit file bodies — that's pack's job.
+            let token_limit = if max_tokens == 0 {
+                None
             } else {
-                (true, Some(max_tokens))
+                Some(max_tokens)
             };
             let result = codebones_core::api::pack(
                 &dir,
@@ -596,7 +596,7 @@ fn main() -> Result<()> {
                 token_limit,
                 codebones_core::api::PackOptions {
                     no_file_summary: false,
-                    no_files,
+                    no_files: true,
                     remove_comments,
                     remove_empty_lines,
                     truncate_base64,

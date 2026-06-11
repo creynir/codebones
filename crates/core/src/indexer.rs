@@ -118,8 +118,14 @@ impl Indexer for DefaultIndexer {
                 continue; // Skip symlinks when not following
             }
 
-            // Secret exclusion
-            let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+            // Secret exclusion — compared lowercase: on case-insensitive
+            // filesystems (APFS, NTFS) `.ENV` or `ID_RSA` are the same files
+            // and must not slip past the list.
+            let file_name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_lowercase();
             if file_name == ".env"
                 || file_name.starts_with(".env.")
                 || file_name == ".envrc"
@@ -214,7 +220,7 @@ impl Indexer for DefaultIndexer {
             });
 
             count += 1;
-            if count >= options.max_file_count {
+            if count > options.max_file_count {
                 return Err(IndexerError::FileCountLimitExceeded);
             }
         }

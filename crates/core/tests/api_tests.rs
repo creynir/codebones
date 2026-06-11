@@ -1837,6 +1837,160 @@ fn graph_file_import_strings_match_source_import() -> Result<(), Box<dyn std::er
 }
 
 // ---------------------------------------------------------------------------
+// Regression: parent-directory relative imports (`../api/foo`) must resolve so
+// blast radius sees importers in sibling directories.
+// ---------------------------------------------------------------------------
+
+/// Helper: a project where every importer reaches the target through `..`.
+///
+///   client/src/api/engine-api-client.ts        (target, no imports)
+///   client/src/api/api-helpers.ts              imports ./engine-api-client
+///   client/src/components/app-shell.tsx        imports ../api/engine-api-client
+///   client/src/hooks/use-engine.ts             imports ../api/engine-api-client
+fn write_parent_relative_import_fixture(dir: &TempDir) {
+    let src = dir.path().join("client").join("src");
+    for sub in ["api", "components", "hooks"] {
+        fs::create_dir_all(src.join(sub)).expect("create subdir");
+    }
+
+    fs::write(
+        src.join("api").join("engine-api-client.ts"),
+        "export class EngineApiClient { ping() { return 'pong'; } }\n",
+    )
+    .expect("write engine-api-client.ts");
+    fs::write(
+        src.join("api").join("api-helpers.ts"),
+        "import { EngineApiClient } from './engine-api-client';\nexport const client = new EngineApiClient();\n",
+    )
+    .expect("write api-helpers.ts");
+    fs::write(
+        src.join("components").join("app-shell.tsx"),
+        "import { EngineApiClient } from \"../api/engine-api-client\";\nexport function AppShell() { return null; }\n",
+    )
+    .expect("write app-shell.tsx");
+    fs::write(
+        src.join("hooks").join("use-engine.ts"),
+        "import { EngineApiClient } from '../api/engine-api-client';\nexport function useEngine() { return new EngineApiClient(); }\n",
+    )
+    .expect("write use-engine.ts");
+}
+
+#[test]
+fn graph_file_finds_importers_using_parent_relative_imports(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_parent_relative_import_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    let result = api::graph_file(dir.path(), "client/src/api/engine-api-client.ts", 3)
+        .expect("graph_file should succeed");
+
+    let affected: Vec<&str> = result
+        .affected_files
+        .iter()
+        .map(|f| f.path.as_str())
+        .collect();
+
+    for expected in [
+        "client/src/api/api-helpers.ts",
+        "client/src/components/app-shell.tsx",
+        "client/src/hooks/use-engine.ts",
+    ] {
+        assert!(
+            affected.contains(&expected),
+            "{} imports the target and must be in the blast radius; got: {:?}",
+            expected,
+            affected
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn graph_file_errors_on_path_not_in_index() {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    // An unknown path must error rather than return an empty blast radius —
+    // "0 affected files" for a typo reads as "safe to change".
+    let result = api::graph_file(dir.path(), "src/typo.ts", 3);
+    assert!(
+        result.is_err(),
+        "graph_file on a path absent from the index must return an error"
+    );
+}
+
+#[test]
+fn index_rebuilds_db_when_index_format_version_is_stale() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path())?;
+
+    let version_path = dir.path().join(".codebones").join("index_version");
+    assert!(
+        version_path.exists(),
+        "index() must stamp .codebones/index_version"
+    );
+
+    // Tamper with utils.ts's import row the way an older binary would have left
+    // it (unresolved raw target instead of "src/db.ts"), keeping the file hash
+    // intact so the per-file hash skip would preserve the bad row. Then mark the
+    // index as written by an old format.
+    {
+        use codebones_core::cache::{CacheStore, SqliteCache};
+        let db_path = dir.path().join(".codebones").join("codebones.db");
+        let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+        let current_hash = cache
+            .get_file_hash("src/utils.ts")?
+            .expect("utils.ts must be indexed");
+        let content = fs::read(dir.path().join("src/utils.ts"))?;
+        cache.delete_file("src/utils.ts")?;
+        let file_id = cache.upsert_file("src/utils.ts", &current_hash, &content)?;
+        cache.insert_import(file_id, "./db", "./db")?;
+    }
+    // Sanity: the per-file hash skip preserves the tampered row across a normal
+    // re-index, so blast radius misses utils.ts — exactly the upgrade scenario.
+    let before = api::graph_file(dir.path(), "src/db.ts", 1)?;
+    assert!(
+        !before
+            .affected_files
+            .iter()
+            .any(|f| f.path.contains("utils.ts")),
+        "test setup: tampered row must hide utils.ts from the blast radius"
+    );
+
+    fs::write(&version_path, "0")?;
+
+    // Re-index must detect the stale format and rebuild from scratch despite the
+    // unchanged file hash: the tampered import row is discarded.
+    api::index(dir.path())?;
+    let result = api::graph_file(dir.path(), "src/db.ts", 1)?;
+    assert!(
+        result
+            .affected_files
+            .iter()
+            .any(|f| f.path.contains("utils.ts")),
+        "stale-format DB must be rebuilt so utils.ts -> db.ts resolves; got: {:?}",
+        result
+            .affected_files
+            .iter()
+            .map(|f| &f.path)
+            .collect::<Vec<_>>()
+    );
+    let restamped = fs::read_to_string(&version_path)?;
+    assert_ne!(
+        restamped.trim(),
+        "0",
+        "index() must restamp the current format version"
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // init command
 // ---------------------------------------------------------------------------
 
