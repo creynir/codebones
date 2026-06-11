@@ -127,6 +127,14 @@ fn git_working_tree_clean(dir: &Path) -> bool {
 ///
 /// Must be called before `get`, `outline`, or `search`; those functions read from the cache `index` populates.
 pub fn index(dir: &Path) -> Result<()> {
+    // Index an existing directory; never conjure the target tree. Without this
+    // guard, prepare_index_storage's create_dir_all would silently create an
+    // arbitrary path on any writable filesystem (it errors on Unix only because
+    // `/` is unwritable, not by design).
+    if !dir.is_dir() {
+        anyhow::bail!("Cannot index '{}': directory does not exist", dir.display());
+    }
+
     // Prepare index storage without mutating repository ignore or agent docs.
     prepare_index_storage(dir)?;
 
