@@ -80,6 +80,21 @@ fn index_format_current(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// DB path keys always use `/` separators so import resolution (which joins and
+/// normalizes with `/`) matches on every platform. On Unix, `\` is a legal
+/// filename character and must not be rewritten.
+fn normalize_path_key(s: &str) -> String {
+    if cfg!(windows) {
+        s.replace('\\', "/")
+    } else {
+        s.to_string()
+    }
+}
+
+fn path_key(path: &Path) -> String {
+    normalize_path_key(&path.to_string_lossy())
+}
+
 /// Returns true when the git working tree is clean (no staged/unstaged changes to
 /// tracked files and no untracked files). The tool's own `.codebones/` storage is
 /// not counted — it is always present after indexing and would otherwise mark
@@ -130,10 +145,7 @@ pub fn index(dir: &Path) -> Result<()> {
 
     let indexer = DefaultIndexer;
     let hashes = indexer.index(dir, &IndexerOptions::default())?;
-    let current_paths: HashSet<String> = hashes
-        .iter()
-        .map(|fh| fh.path.to_string_lossy().to_string())
-        .collect();
+    let current_paths: HashSet<String> = hashes.iter().map(|fh| path_key(&fh.path)).collect();
 
     for cached_path in cache.list_file_paths()? {
         if current_paths.contains(&cached_path) {
@@ -159,7 +171,7 @@ pub fn index(dir: &Path) -> Result<()> {
     }
 
     for fh in hashes {
-        let path_str = fh.path.to_string_lossy().to_string();
+        let path_str = path_key(&fh.path);
         let existing_hash = cache.get_file_hash(&path_str)?;
 
         if existing_hash.as_deref() != Some(fh.hash.as_str()) {
@@ -672,6 +684,10 @@ pub fn graph_file(dir: &Path, file_path: &str, max_depth: usize) -> Result<Blast
         .ok_or_else(|| anyhow::anyhow!("Database path contains invalid UTF-8: {:?}", db_path))?;
     let cache = SqliteCache::new(db_path_str)?;
     cache.init()?;
+
+    // Accept Windows-style separators in user input; DB keys always use `/`.
+    let normalized_input = normalize_path_key(file_path);
+    let file_path = normalized_input.as_str();
 
     // An unknown path must not be reported as "0 affected files" — that reads
     // as "safe to change" when the caller may simply have mistyped the path.

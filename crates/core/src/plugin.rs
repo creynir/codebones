@@ -75,6 +75,17 @@ impl Packer {
         s.replace("]]>", "]]]]><![CDATA[>")
     }
 
+    /// Markdown structure (headings, list items, fences) can only be forged at
+    /// a line start, so replacing control characters with spaces is sufficient
+    /// to keep repo-controlled strings (paths, symbol names, plugin metadata)
+    /// from injecting structure into the packed output. File content is
+    /// fence-protected separately.
+    fn markdown_sanitize(s: &str) -> String {
+        s.chars()
+            .map(|c| if c.is_control() { ' ' } else { c })
+            .collect()
+    }
+
     /// Creates a new Packer instance.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -229,9 +240,16 @@ impl Packer {
                     let mut running_tokens: usize = 0;
                     output.push_str(header);
                     for path in file_paths {
-                        let mut entry = format!("- {}\n", path.display());
+                        let mut entry = format!(
+                            "- {}\n",
+                            Self::markdown_sanitize(&path.display().to_string())
+                        );
                         for (kind, name) in lookup_symbols(path)? {
-                            entry.push_str(&format!("  - {} {}\n", kind, name));
+                            entry.push_str(&format!(
+                                "  - {} {}\n",
+                                Self::markdown_sanitize(&kind),
+                                Self::markdown_sanitize(&name)
+                            ));
                         }
 
                         if let (Some(ref bpe), Some(max)) = (&bpe, self.max_tokens) {
@@ -443,7 +461,10 @@ impl Packer {
                     if degrade_to_bones {
                         continue;
                     }
-                    output.push_str(&format!("## {}\n\n", path.display()));
+                    output.push_str(&format!(
+                        "## {}\n\n",
+                        Self::markdown_sanitize(&path.display().to_string())
+                    ));
                     {
                         // Find longest run of backticks in content and use one more as the fence
                         // delimiter (CommonMark spec approach) to prevent fence injection.
@@ -495,7 +516,11 @@ impl Packer {
                         output.push_str("Bones:\n");
                         for bone in &bones {
                             for (k, v) in &bone.metadata {
-                                output.push_str(&format!("- {}: {}\n", k, v));
+                                output.push_str(&format!(
+                                    "- {}: {}\n",
+                                    Self::markdown_sanitize(k),
+                                    Self::markdown_sanitize(v)
+                                ));
                             }
                         }
                         output.push('\n');
@@ -1602,6 +1627,68 @@ mod tests {
         assert!(
             output.contains("</repository>"),
             "Output must still contain </repository> after metadata injection; got:\n{}",
+            output
+        );
+    }
+
+    /// Plugin metadata containing newlines must not be able to forge Markdown
+    /// structure (headings, list items) in the packed output — Markdown
+    /// injection requires a line start, so control characters are replaced.
+    #[test]
+    fn test_plugin_metadata_markdown_injection_neutralized() {
+        struct MarkdownDangerousPlugin;
+
+        impl ContextPlugin for MarkdownDangerousPlugin {
+            fn name(&self) -> &str {
+                "markdown_dangerous"
+            }
+
+            fn detect(&self, _directory: &Path) -> bool {
+                true
+            }
+
+            fn enrich(&self, _file_path: &Path, base_bones: &mut Vec<Bone>) -> Result<()> {
+                for bone in base_bones.iter_mut() {
+                    bone.metadata.insert(
+                        "key".to_string(),
+                        "x\n## INJECTED HEADING\n- forged list item".to_string(),
+                    );
+                }
+                Ok(())
+            }
+        }
+
+        let (_dir, file_path) = make_temp_rs_file("fn main() {}\n");
+        let mut packer = Packer::new(
+            SqliteCache::new_in_memory().expect("failed to create test cache"),
+            Parser {},
+            OutputFormat::Markdown,
+            None,
+            false,
+            false,
+            false,
+            false,
+            false,
+        );
+        packer.register_plugin(Box::new(MarkdownDangerousPlugin));
+
+        let output = packer.pack(&[file_path]).expect("pack should succeed");
+
+        // No line in the output may start with the injected heading/list markers.
+        assert!(
+            !output.lines().any(|l| l.starts_with("## INJECTED HEADING")),
+            "Metadata newline forged a Markdown heading; got:\n{}",
+            output
+        );
+        assert!(
+            !output.lines().any(|l| l.starts_with("- forged list item")),
+            "Metadata newline forged a Markdown list item; got:\n{}",
+            output
+        );
+        // The metadata text itself must still be present (flattened onto one line).
+        assert!(
+            output.contains("INJECTED HEADING"),
+            "Sanitized metadata value must still appear in output; got:\n{}",
             output
         );
     }
