@@ -182,11 +182,7 @@ pub enum InitMcpTargetArg {
     None,
 }
 
-fn format_graph(
-    result: &codebones_core::api::GraphResult,
-    format: &str,
-    unlimited: bool,
-) -> String {
+fn format_graph(result: &codebones_core::api::GraphResult, format: &str) -> String {
     match format {
         "json" => {
             let files_json: Vec<String> = result
@@ -246,12 +242,11 @@ fn format_graph(
                     f.path, f.import_count
                 ));
             }
-            // Only include the import map if we're showing all files (no top filter)
-            if unlimited {
-                out.push_str("\n## Import Map\n");
-                for e in &result.edges {
-                    out.push_str(&format!("- `{}` → {}\n", e.from, e.to));
-                }
+            // One rule across all formats: --top caps the files ranking only;
+            // the edge list is always the complete graph.
+            out.push_str("\n## Import Map\n");
+            for e in &result.edges {
+                out.push_str(&format!("- `{}` → {}\n", e.from, e.to));
             }
             out
         }
@@ -583,12 +578,12 @@ fn main() -> Result<()> {
             include,
             ignore,
         } => {
-            // max_tokens == 0 means unlimited full-content pack; any positive value
-            // means skeleton-only output capped at that token budget.
-            let (no_files, token_limit) = if max_tokens == 0 {
-                (false, None)
+            // map is always skeleton-only (`pack --no-files`); max_tokens == 0 just
+            // lifts the token budget. It must never emit file bodies — that's pack's job.
+            let token_limit = if max_tokens == 0 {
+                None
             } else {
-                (true, Some(max_tokens))
+                Some(max_tokens)
             };
             let result = codebones_core::api::pack(
                 &dir,
@@ -596,7 +591,7 @@ fn main() -> Result<()> {
                 token_limit,
                 codebones_core::api::PackOptions {
                     no_file_summary: false,
-                    no_files,
+                    no_files: true,
                     remove_comments,
                     remove_empty_lines,
                     truncate_base64,
@@ -641,13 +636,13 @@ fn main() -> Result<()> {
                 let output = format_blast_radius(&file_path, &result.affected_files, &format);
                 println!("{}", output);
             } else {
-                // Full graph mode — top=0 means unlimited, otherwise truncate
+                // Full graph mode — --top caps the files ranking (0 = uncapped);
+                // edges are always the complete graph.
                 let mut graph_result = codebones_core::api::graph(&dir)?;
-                let unlimited = top == 0;
-                if !unlimited {
+                if top > 0 {
                     graph_result.files.truncate(top);
                 }
-                let output = format_graph(&graph_result, &format, unlimited);
+                let output = format_graph(&graph_result, &format);
                 println!("{}", output);
             }
         }

@@ -268,6 +268,63 @@ fn index_preserves_cached_content_for_previously_indexed_unreadable_file_on_rein
     Ok(())
 }
 
+/// A file added to .gitignore after the first index must drop out of the
+/// cache on re-index instead of serving its last-indexed content forever.
+#[test]
+fn index_prunes_cached_rows_for_newly_gitignored_files() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    fs::write(dir.path().join("kept.rs"), "pub fn kept_fn() {}\n")?;
+    fs::write(dir.path().join("hidden.rs"), "pub fn hidden_fn() {}\n")?;
+
+    api::index(dir.path())?;
+    assert!(
+        !api::search(dir.path(), "hidden_fn")?.is_empty(),
+        "pre-condition: hidden.rs must be indexed before it is gitignored"
+    );
+
+    fs::write(dir.path().join(".gitignore"), "hidden.rs\n")?;
+    api::index(dir.path())?;
+
+    assert!(
+        api::search(dir.path(), "hidden_fn")?.is_empty(),
+        "newly gitignored file must be pruned from the cache"
+    );
+    assert!(
+        !api::search(dir.path(), "kept_fn")?.is_empty(),
+        "non-ignored files must survive the prune"
+    );
+
+    Ok(())
+}
+
+/// A file that grows past the indexer's size cap after being indexed must be
+/// pruned on re-index, not frozen at its last-indexed content.
+#[test]
+fn index_prunes_cached_rows_for_files_grown_past_size_cap() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = TempDir::new().expect("failed to create tempdir");
+    let grower = dir.path().join("grower.rs");
+    fs::write(&grower, "pub fn small_fn() {}\n")?;
+
+    api::index(dir.path())?;
+    assert!(
+        !api::search(dir.path(), "small_fn")?.is_empty(),
+        "pre-condition: grower.rs must be indexed while small"
+    );
+
+    // Grow beyond the 500 KiB default cap; the walker now skips the file.
+    let padding = format!("// {}\n", "x".repeat(600 * 1024));
+    fs::write(&grower, format!("pub fn small_fn() {{}}\n{}", padding))?;
+    api::index(dir.path())?;
+
+    assert!(
+        api::search(dir.path(), "small_fn")?.is_empty(),
+        "file grown past the size cap must be pruned from the cache"
+    );
+
+    Ok(())
+}
+
 // ===========================================================================
 // api::get() tests
 // ===========================================================================
@@ -1831,6 +1888,160 @@ fn graph_file_import_strings_match_source_import() -> Result<(), Box<dyn std::er
         has_db_ref,
         "utils.ts AffectedFile.imports must contain a string referencing 'db'; got: {:?}",
         utils_entry.imports
+    );
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Regression: parent-directory relative imports (`../api/foo`) must resolve so
+// blast radius sees importers in sibling directories.
+// ---------------------------------------------------------------------------
+
+/// Helper: a project where every importer reaches the target through `..`.
+///
+///   client/src/api/engine-api-client.ts        (target, no imports)
+///   client/src/api/api-helpers.ts              imports ./engine-api-client
+///   client/src/components/app-shell.tsx        imports ../api/engine-api-client
+///   client/src/hooks/use-engine.ts             imports ../api/engine-api-client
+fn write_parent_relative_import_fixture(dir: &TempDir) {
+    let src = dir.path().join("client").join("src");
+    for sub in ["api", "components", "hooks"] {
+        fs::create_dir_all(src.join(sub)).expect("create subdir");
+    }
+
+    fs::write(
+        src.join("api").join("engine-api-client.ts"),
+        "export class EngineApiClient { ping() { return 'pong'; } }\n",
+    )
+    .expect("write engine-api-client.ts");
+    fs::write(
+        src.join("api").join("api-helpers.ts"),
+        "import { EngineApiClient } from './engine-api-client';\nexport const client = new EngineApiClient();\n",
+    )
+    .expect("write api-helpers.ts");
+    fs::write(
+        src.join("components").join("app-shell.tsx"),
+        "import { EngineApiClient } from \"../api/engine-api-client\";\nexport function AppShell() { return null; }\n",
+    )
+    .expect("write app-shell.tsx");
+    fs::write(
+        src.join("hooks").join("use-engine.ts"),
+        "import { EngineApiClient } from '../api/engine-api-client';\nexport function useEngine() { return new EngineApiClient(); }\n",
+    )
+    .expect("write use-engine.ts");
+}
+
+#[test]
+fn graph_file_finds_importers_using_parent_relative_imports(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_parent_relative_import_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    let result = api::graph_file(dir.path(), "client/src/api/engine-api-client.ts", 3)
+        .expect("graph_file should succeed");
+
+    let affected: Vec<&str> = result
+        .affected_files
+        .iter()
+        .map(|f| f.path.as_str())
+        .collect();
+
+    for expected in [
+        "client/src/api/api-helpers.ts",
+        "client/src/components/app-shell.tsx",
+        "client/src/hooks/use-engine.ts",
+    ] {
+        assert!(
+            affected.contains(&expected),
+            "{} imports the target and must be in the blast radius; got: {:?}",
+            expected,
+            affected
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn graph_file_errors_on_path_not_in_index() {
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path()).expect("index");
+
+    // An unknown path must error rather than return an empty blast radius —
+    // "0 affected files" for a typo reads as "safe to change".
+    let result = api::graph_file(dir.path(), "src/typo.ts", 3);
+    assert!(
+        result.is_err(),
+        "graph_file on a path absent from the index must return an error"
+    );
+}
+
+#[test]
+fn index_rebuilds_db_when_index_format_version_is_stale() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = TempDir::new().expect("failed to create tempdir");
+    write_ts_graph_fixture(&dir);
+    api::index(dir.path())?;
+
+    let version_path = dir.path().join(".codebones").join("index_version");
+    assert!(
+        version_path.exists(),
+        "index() must stamp .codebones/index_version"
+    );
+
+    // Tamper with utils.ts's import row the way an older binary would have left
+    // it (unresolved raw target instead of "src/db.ts"), keeping the file hash
+    // intact so the per-file hash skip would preserve the bad row. Then mark the
+    // index as written by an old format.
+    {
+        use codebones_core::cache::{CacheStore, SqliteCache};
+        let db_path = dir.path().join(".codebones").join("codebones.db");
+        let cache = SqliteCache::new(db_path.to_str().unwrap())?;
+        let current_hash = cache
+            .get_file_hash("src/utils.ts")?
+            .expect("utils.ts must be indexed");
+        let content = fs::read(dir.path().join("src/utils.ts"))?;
+        cache.delete_file("src/utils.ts")?;
+        let file_id = cache.upsert_file("src/utils.ts", &current_hash, &content)?;
+        cache.insert_import(file_id, "./db", "./db")?;
+    }
+    // Sanity: the per-file hash skip preserves the tampered row across a normal
+    // re-index, so blast radius misses utils.ts — exactly the upgrade scenario.
+    let before = api::graph_file(dir.path(), "src/db.ts", 1)?;
+    assert!(
+        !before
+            .affected_files
+            .iter()
+            .any(|f| f.path.contains("utils.ts")),
+        "test setup: tampered row must hide utils.ts from the blast radius"
+    );
+
+    fs::write(&version_path, "0")?;
+
+    // Re-index must detect the stale format and rebuild from scratch despite the
+    // unchanged file hash: the tampered import row is discarded.
+    api::index(dir.path())?;
+    let result = api::graph_file(dir.path(), "src/db.ts", 1)?;
+    assert!(
+        result
+            .affected_files
+            .iter()
+            .any(|f| f.path.contains("utils.ts")),
+        "stale-format DB must be rebuilt so utils.ts -> db.ts resolves; got: {:?}",
+        result
+            .affected_files
+            .iter()
+            .map(|f| &f.path)
+            .collect::<Vec<_>>()
+    );
+    let restamped = fs::read_to_string(&version_path)?;
+    assert_ne!(
+        restamped.trim(),
+        "0",
+        "index() must restamp the current format version"
     );
 
     Ok(())

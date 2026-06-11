@@ -1023,6 +1023,38 @@ fn test_graph_default_outputs_markdown_with_file_and_counts() {
         );
 }
 
+/// Returns only the "Most Imported Files" ranking portion of `graph` markdown
+/// output — `--top` assertions must not match files that legitimately appear
+/// as edge endpoints in the always-present Import Map below it.
+fn graph_ranking_section(stdout: &str) -> String {
+    stdout
+        .split("## Import Map")
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// `--top` caps only the "Most Imported Files" ranking; the Import Map (the
+/// complete edge list) is always present in markdown, including under the
+/// default top=50.
+#[test]
+fn test_graph_default_markdown_includes_full_import_map() {
+    let temp = setup_graph_repo();
+    let root = temp.path();
+
+    Command::cargo_bin("codebones")
+        .unwrap()
+        .current_dir(root)
+        .args(["graph"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("## Import Map")
+                // utils.ts -> db.ts edge must be rendered
+                .and(predicate::str::contains("utils.ts").and(predicate::str::contains("→"))),
+        );
+}
+
 /// AC6: `codebones graph <file>` outputs the blast radius for that file.
 #[test]
 fn test_graph_file_outputs_blast_radius() {
@@ -1170,16 +1202,17 @@ fn test_graph_top_n_limits_output_to_n_hottest_files() {
         .clone();
 
     let stdout = String::from_utf8_lossy(&output);
-    // With --top 1, only db.ts (count=2) should appear.
+    let ranking = graph_ranking_section(&stdout);
+    // With --top 1, only db.ts (count=2) should appear in the ranking.
     assert!(
-        stdout.contains("db.ts"),
+        ranking.contains("db.ts"),
         "--top 1 must include db.ts (hottest file); got: {}",
         stdout
     );
-    // utils.ts (count=1) must NOT appear when top=1.
+    // utils.ts (count=1) must NOT appear in the ranking when top=1.
     assert!(
-        !stdout.contains("utils.ts"),
-        "--top 1 must not include utils.ts (second hottest); got: {}",
+        !ranking.contains("utils.ts"),
+        "--top 1 must not rank utils.ts (second hottest); got: {}",
         stdout
     );
 }
@@ -1642,9 +1675,11 @@ fn setup_large_map_repo() -> TempDir {
     let temp = TempDir::new().unwrap();
     let root = temp.path();
 
-    // Write 200 Rust files, each with several long function bodies.  The
-    // cumulative token count will comfortably exceed 50 000 tokens.
-    for i in 0..200 {
+    // Write 1500 Rust files, each with several functions. The cumulative token
+    // count of the SKELETON (paths + signatures) comfortably exceeds 50 000
+    // tokens — map is skeleton-only, so bodies don't count toward its output.
+    // (1000 files measured ~202 KB ≈ just under 50k tokens; 1500 clears it.)
+    for i in 0..1500 {
         let content = format!(
             r#"/// Module {i}
 pub fn function_a_{i}(input: &str) -> String {{
@@ -1691,15 +1726,16 @@ fn test_graph_default_top_is_50_not_unlimited() {
     let stdout = String::from_utf8_lossy(&output);
 
     // With 51 imported leaf files and default top=50, leaf_50.ts should NOT
-    // appear (it's cut off). If the current implementation is unlimited, all 51
-    // leaf files will be present — the test fails, proving the default is missing.
+    // appear in the ranking (it's cut off). The Import Map below the ranking
+    // legitimately contains every file, so only the ranking section counts.
+    let ranking = graph_ranking_section(&stdout);
     let leaf_count = (0..=50)
-        .filter(|i| stdout.contains(&format!("leaf_{:02}.ts", i)))
+        .filter(|i| ranking.contains(&format!("leaf_{:02}.ts", i)))
         .count();
 
     assert!(
         leaf_count <= 50,
-        "default `graph` must show at most 50 files; got {} leaf files in output:\n{}",
+        "default `graph` must rank at most 50 files; got {} leaf files in ranking:\n{}",
         leaf_count,
         stdout
     );
@@ -1754,13 +1790,14 @@ fn test_graph_top_10_shows_ten_files() {
 
     let stdout = String::from_utf8_lossy(&output);
 
+    let ranking = graph_ranking_section(&stdout);
     let leaf_count = (0..=50)
-        .filter(|i| stdout.contains(&format!("leaf_{:02}.ts", i)))
+        .filter(|i| ranking.contains(&format!("leaf_{:02}.ts", i)))
         .count();
 
     assert_eq!(
         leaf_count, 10,
-        "--top 10 must show exactly 10 leaf files; got {} in output:\n{}",
+        "--top 10 must rank exactly 10 leaf files; got {} in ranking:\n{}",
         leaf_count, stdout
     );
 }
@@ -1855,8 +1892,8 @@ fn test_map_max_tokens_zero_returns_full_output() {
 
     let stdout = String::from_utf8_lossy(&output);
 
-    // Every one of the 200 module files must appear in the full output.
-    for i in 0..200 {
+    // Every one of the 1500 module files must appear in the full output.
+    for i in 0..1500 {
         let module = format!("mod_{:03}.rs", i);
         assert!(
             stdout.contains(&module),

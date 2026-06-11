@@ -9,9 +9,17 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
+  verify-tag:
+    name: Verify tag matches versioned files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches crate versions
+        run: bash scripts/check_tag_version.sh "$GITHUB_REF_NAME"
+
   build-wheels:
     name: Build wheels on ${{ matrix.os }}
-    needs: test
+    needs: [test, verify-tag]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:

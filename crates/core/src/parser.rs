@@ -292,7 +292,8 @@ pub fn get_spec_for_extension(ext: &str) -> Option<LanguageSpec> {
         "rs" => Some(get_rust_spec()),
         "py" => Some(get_python_spec()),
         "go" => Some(get_go_spec()),
-        "ts" | "tsx" | "js" | "jsx" => Some(get_typescript_spec()),
+        "ts" | "js" => Some(get_typescript_spec()),
+        "tsx" | "jsx" => Some(get_tsx_spec()),
         "java" => Some(get_java_spec()),
         "c" | "h" => Some(get_c_spec()),
         "cpp" | "hpp" | "cc" | "cxx" => Some(get_cpp_spec()),
@@ -349,6 +350,15 @@ pub fn get_typescript_spec() -> LanguageSpec {
     }
 }
 
+/// Same node types as TypeScript, but the TSX grammar — required to parse JSX
+/// syntax; the plain TypeScript grammar produces ERROR nodes on JSX elements.
+pub fn get_tsx_spec() -> LanguageSpec {
+    LanguageSpec {
+        language: tree_sitter_typescript::LANGUAGE_TSX.into(),
+        ..get_typescript_spec()
+    }
+}
+
 pub fn parse_file(source: &str, spec: &LanguageSpec) -> ParsedDocument {
     let mut parser = tree_sitter::Parser::new();
     parser
@@ -375,9 +385,11 @@ fn node_text<'a>(node: Node, source: &'a [u8]) -> &'a str {
 
 fn strip_quotes(s: &str) -> String {
     let s = s.trim();
-    if (s.starts_with('"') && s.ends_with('"'))
-        || (s.starts_with('\'') && s.ends_with('\''))
-        || (s.starts_with('`') && s.ends_with('`'))
+    // len check guards a lone quote char, where start == end would underflow
+    if s.len() >= 2
+        && ((s.starts_with('"') && s.ends_with('"'))
+            || (s.starts_with('\'') && s.ends_with('\''))
+            || (s.starts_with('`') && s.ends_with('`')))
     {
         s[1..s.len() - 1].to_string()
     } else {
@@ -449,18 +461,19 @@ fn walk_for_imports(
     let kind = node.kind();
 
     if is_typescript {
-        // import_statement: get the source child (a string node)
-        if kind == "import_statement" {
+        // import_statement / re-exports (`export * from`, `export { x } from`):
+        // both carry the module in a `source` string child
+        if kind == "import_statement" || kind == "export_statement" {
             if let Some(source_node) = node.child_by_field_name("source") {
                 let text = node_text(source_node, src);
                 imports.push(strip_quotes(text));
             }
         }
-        // call_expression where function is `require`
+        // call_expression where function is `require` or dynamic `import`
         if kind == "call_expression" {
             if let Some(func_node) = node.child_by_field_name("function") {
                 let func_text = node_text(func_node, src);
-                if func_text == "require" {
+                if func_text == "require" || func_text == "import" {
                     if let Some(args_node) = node.child_by_field_name("arguments") {
                         let mut c = args_node.walk();
                         for arg in args_node.children(&mut c) {
@@ -478,6 +491,7 @@ fn walk_for_imports(
     } else if is_python {
         if kind == "import_statement" {
             // get all `dotted_name` or `aliased_import` children
+            // (`import a, b` has one child per module — capture every one)
             let mut c = node.walk();
             let mut found = false;
             for child in node.children(&mut c) {
@@ -488,7 +502,6 @@ fn walk_for_imports(
                     let module = text.split(" as ").next().unwrap_or(text).trim();
                     imports.push(module.to_string());
                     found = true;
-                    break;
                 }
             }
             if !found {
@@ -1087,6 +1100,88 @@ export const App: FC = () => null;
             "should extract require('fs'); got: {:?}",
             doc.imports
         );
+    }
+
+    #[test]
+    fn test_tsx_file_with_jsx_parses_symbols_and_imports() {
+        // The plain TypeScript grammar produces ERROR nodes on JSX; the tsx spec must not.
+        let source = r#"import { EngineApiClient } from "../api/engine-api-client";
+
+export function AppShell() {
+    return <div className="shell"><span>hello</span></div>;
+}
+
+export class ShellState {
+    reset() {}
+}
+"#;
+        let spec = get_tsx_spec();
+        let doc = parse_file(source, &spec);
+
+        assert!(
+            doc.imports
+                .iter()
+                .any(|i| i.contains("../api/engine-api-client")),
+            "should extract import from JSX file; got: {:?}",
+            doc.imports
+        );
+        assert!(
+            doc.symbols.iter().any(|s| s.name == "AppShell"),
+            "should extract function containing JSX; got: {:?}",
+            doc.symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+        assert!(
+            doc.symbols.iter().any(|s| s.name == "ShellState"),
+            "should extract class declared after JSX; got: {:?}",
+            doc.symbols.iter().map(|s| &s.name).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_extract_typescript_reexports_and_dynamic_imports() {
+        let source = r#"export * from './barrel-a';
+export { thing } from './barrel-b';
+
+async function load() {
+    const mod = await import('./lazy');
+    return mod;
+}
+"#;
+        let spec = get_typescript_spec();
+        let doc = parse_file(source, &spec);
+
+        for expected in ["./barrel-a", "./barrel-b", "./lazy"] {
+            assert!(
+                doc.imports.iter().any(|i| i.contains(expected)),
+                "should extract {}; got: {:?}",
+                expected,
+                doc.imports
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_python_multi_module_import_line() {
+        let source = "import os, sys, json\n";
+        let spec = get_python_spec();
+        let doc = parse_file(source, &spec);
+
+        for expected in ["os", "sys", "json"] {
+            assert!(
+                doc.imports.iter().any(|i| i == expected),
+                "import os, sys, json should yield '{}'; got: {:?}",
+                expected,
+                doc.imports
+            );
+        }
+    }
+
+    #[test]
+    fn test_strip_quotes_single_quote_char_does_not_panic() {
+        assert_eq!(strip_quotes("\""), "\"");
+        assert_eq!(strip_quotes("'"), "'");
+        assert_eq!(strip_quotes(""), "");
+        assert_eq!(strip_quotes("\"x\""), "x");
     }
 
     #[test]
